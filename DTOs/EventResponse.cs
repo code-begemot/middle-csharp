@@ -1,6 +1,6 @@
-namespace MiddleCsharp.Models;
+namespace MiddleCsharp.DTOs;
 
-public class Event
+public class EventResponse
 {
     public Guid Id { get; set; }
     public string Title { get; set; } = string.Empty;

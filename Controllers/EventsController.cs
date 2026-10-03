@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using MiddleCsharp.Models;
+using MiddleCsharp.DTOs;
 using MiddleCsharp.Services;
 
-namespace middle_csharp.Controllers;
+namespace MiddleCsharp.Controllers;
 
 [ApiController]
 [Route("events")]
@@ -17,55 +17,39 @@ public class EventsController : ControllerBase
 
     // GET /events
     [HttpGet]
-    public ActionResult<IEnumerable<Event>> GetAll()
+    public ActionResult<IEnumerable<EventResponse>> GetAll()
     {
-        return Ok(_eventService.GetAll());
+        return Ok(_eventService.GetAll().ToResponse());
     }
 
     // GET /events/{id}
     [HttpGet("{id:guid}")]
-    public ActionResult<Event> GetById(Guid id)
+    public ActionResult<EventResponse> GetById(Guid id)
     {
         var evt = _eventService.GetById(id);
-        if (evt is null)
-        {
-            return NotFound();
-        }
-
-        return Ok(evt);
+        return evt is null ? NotFound() : Ok(evt.ToResponse());
     }
 
     // POST /events
     [HttpPost]
-    public ActionResult<Event> Create([FromBody] Event newEvent)
+    public ActionResult<EventResponse> Create([FromBody] CreateEventRequest request)
     {
-        var created = _eventService.Create(newEvent);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
+        var created = _eventService.Create(request.ToEntity());
+        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created.ToResponse());
     }
 
     // PUT /events/{id}
     [HttpPut("{id:guid}")]
-    public IActionResult Update(Guid id, [FromBody] Event updatedEvent)
+    public IActionResult Update(Guid id, [FromBody] UpdateEventRequest request)
     {
-        var success = _eventService.Update(id, updatedEvent);
-        if (!success)
-        {
-            return NotFound();
-        }
-
-        return NoContent();
+        var success = _eventService.Update(id, request.ToEntity());
+        return success ? NoContent() : NotFound();
     }
 
     // DELETE /events/{id}
     [HttpDelete("{id:guid}")]
     public IActionResult Delete(Guid id)
     {
-        var success = _eventService.Delete(id);
-        if (!success)
-        {
-            return NotFound();
-        }
-
-        return NoContent();
+        return _eventService.Delete(id) ? NoContent() : NotFound();
     }
 }
