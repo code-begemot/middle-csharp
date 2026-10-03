@@ -16,16 +16,24 @@ git checkout sprint-1
 dotnet run
 ```
 
-После запуска приложение доступно по адресу из вывода консоли:
+По умолчанию запускается http-профиль, приложение слушает:
 
-- API: `https://localhost:5027`
-- Swagger UI: `https://localhost:5027/swagger`
+- API: `http://localhost:5027`
+- Swagger UI: `http://localhost:5027/swagger`
 
-Если при первом запуске появляется предупреждение про HTTPS-сертификат:
+Опционально можно запустить https-профиль:
+
+```bash
+dotnet run --launch-profile https
+```
+
+Тогда приложение также слушает `https://localhost:7054`. При первом запуске https-профиля может понадобиться доверить dev-сертификат:
 
 ```bash
 dotnet dev-certs https --trust
 ```
+
+Точные адреса всегда печатаются в консоли при запуске (`Now listening on: ...`).
 
 ## API
 
@@ -39,7 +47,15 @@ dotnet dev-certs https --trust
 | PUT | `/events/{id}` | Обновить событие целиком | `204 No Content` | `400`, `404` |
 | DELETE | `/events/{id}` | Удалить событие | `204 No Content` | `404` |
 
-### Модель `Event`
+## DTO
+
+API принимает и возвращает DTO, а не доменную модель напрямую:
+
+- **`CreateEventRequest`** — тело `POST /events`. Поля: `title`, `description`, `startAt`, `endAt`. Поле `id` не принимается — генерируется сервисом.
+- **`UpdateEventRequest`** — тело `PUT /events/{id}`. Те же поля, что у `CreateEventRequest`.
+- **`EventResponse`** — ответ `GET` и `POST`. Содержит `id` и те же поля.
+
+### Пример `EventResponse`
 
 ```json
 {
@@ -62,7 +78,7 @@ dotnet dev-certs https --trust
 ### Пример запроса на создание события
 
 ```bash
-curl -X POST https://localhost:5027/events \
+curl -X POST http://localhost:5027/events \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Meeting",
@@ -82,6 +98,12 @@ curl -X POST https://localhost:5027/events \
 middle-csharp/
 ├── Controllers/
 │   └── EventsController.cs
+├── DTOs/
+│   ├── CreateEventRequest.cs
+│   ├── UpdateEventRequest.cs
+│   ├── EventResponse.cs
+│   ├── EventRequestBase.cs
+│   └── EventMappingExtensions.cs
 ├── Models/
 │   └── Event.cs
 ├── Services/
