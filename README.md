@@ -1,10 +1,10 @@
 # Middle C# — Events API
 
-Учебный проект: REST API для управления событиями на ASP.NET Core (.NET 9).
+Учебный проект: REST API для управления событиями на ASP.NET Core (.NET 10).
 
 ## Требования
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - Git
 
 ## Запуск

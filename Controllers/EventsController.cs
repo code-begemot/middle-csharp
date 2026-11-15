@@ -15,39 +15,44 @@ public class EventsController : ControllerBase
         _eventService = eventService;
     }
 
-    // GET /events
     [HttpGet]
+    [ProducesResponseType(typeof(IEnumerable<EventResponse>), StatusCodes.Status200OK)]
     public ActionResult<IEnumerable<EventResponse>> GetAll()
     {
         return Ok(_eventService.GetAll().ToResponse());
     }
 
-    // GET /events/{id}
     [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(EventResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public ActionResult<EventResponse> GetById(Guid id)
     {
         var evt = _eventService.GetById(id);
         return evt is null ? NotFound() : Ok(evt.ToResponse());
     }
 
-    // POST /events
     [HttpPost]
+    [ProducesResponseType(typeof(EventResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public ActionResult<EventResponse> Create([FromBody] CreateEventRequest request)
     {
         var created = _eventService.Create(request.ToEntity());
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created.ToResponse());
     }
 
-    // PUT /events/{id}
     [HttpPut("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public IActionResult Update(Guid id, [FromBody] UpdateEventRequest request)
     {
         var success = _eventService.Update(id, request.ToEntity());
         return success ? NoContent() : NotFound();
     }
 
-    // DELETE /events/{id}
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public IActionResult Delete(Guid id)
     {
         return _eventService.Delete(id) ? NoContent() : NotFound();

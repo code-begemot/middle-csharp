@@ -1,11 +1,11 @@
-// Services/EventService.cs
+using System.Collections.Concurrent;
 using MiddleCsharp.Models;
 
 namespace MiddleCsharp.Services;
 
 public class EventService : IEventService
 {
-    private readonly Dictionary<Guid, Event> _events = new();
+    private readonly ConcurrentDictionary<Guid, Event> _events = new();
 
     public Event? GetById(Guid id)
     {
@@ -13,36 +13,31 @@ public class EventService : IEventService
         return evt;
     }
 
-    public IEnumerable<Event> GetAll()
+    public IReadOnlyList<Event> GetAll()
     {
-        return _events.Values;
+        return _events.Values.ToList();
     }
 
     public Event Create(Event newEvent)
     {
-        if (newEvent.Id == Guid.Empty)
-        {
-            newEvent.Id = Guid.NewGuid();
-        }
-
+        newEvent.Id = Guid.NewGuid();
         _events[newEvent.Id] = newEvent;
         return newEvent;
     }
 
     public bool Update(Guid id, Event updatedEvent)
     {
-        if (!_events.ContainsKey(id))
+        if (!_events.TryGetValue(id, out var existing))
         {
             return false;
         }
 
         updatedEvent.Id = id;
-        _events[id] = updatedEvent;
-        return true;
+        return _events.TryUpdate(id, updatedEvent, existing);
     }
 
     public bool Delete(Guid id)
     {
-        return _events.Remove(id);
+        return _events.TryRemove(id, out _);
     }
 }
