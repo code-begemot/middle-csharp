@@ -12,7 +12,6 @@
 ```bash
 git clone https://github.com/code-begemot/middle-csharp.git
 cd middle-csharp
-git checkout sprint-2
 dotnet run --project src/MiddleCsharp
 ```
 
@@ -39,7 +38,7 @@ dotnet dev-certs https --trust
 
 ```bash
 dotnet build          # собирает решение целиком (API + тесты)
-dotnet test           # запускает юнит-тесты EventService
+dotnet test           # запускает юнит-тесты сервиса и middleware
 ```
 
 ## API
@@ -68,7 +67,7 @@ dotnet test           # запускает юнит-тесты EventService
 
 Некорректные `page`/`pageSize` (например, `0` или больше 100) дают `400 Bad Request`.
 
-Пример запроса: активные события со словом «meet» в названии, вторая страница по 5 элементов:
+Пример запроса: события со словом «meet» в названии, вторая страница по 5 элементов:
 
 ```bash
 curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pageSize=5"
@@ -106,7 +105,9 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 
 ## Формат ошибок
 
-Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Необработанные исключения перехватывает глобальный middleware `ExceptionHandlingMiddleware`.
+Все ошибки, возникающие при обработке запроса в контроллерах и сервисах, отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Необработанные исключения перехватывает глобальный middleware `ExceptionHandlingMiddleware`.
+
+Если запрос не совпал ни с одним маршрутом (например, `/events/not-a-guid`), ASP.NET Core возвращает `404` без тела — это стандартный ответ маршрутизации, а не исключение из контроллера.
 
 | Код | Когда | Пример `title` |
 |---|---|---|
@@ -118,6 +119,7 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 
 ```json
 {
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.5",
   "title": "Resource not found",
   "status": 404,
   "detail": "Event with id '3fa85f64-5717-4562-b3fc-2c963f66afa6' was not found.",
@@ -137,6 +139,19 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
     "page": ["Page must be greater than 0."]
   },
   "traceId": "00-8419b2f66b25496df4f5c6d7017247ba-30744435e6f12a1f-00"
+}
+```
+
+Пример ошибки `500`:
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.6.1",
+  "title": "Internal server error",
+  "status": 500,
+  "detail": "An unexpected error occurred while processing the request.",
+  "instance": "/events",
+  "traceId": "0HNQ35B05HMII:00000002"
 }
 ```
 
@@ -182,12 +197,13 @@ In-memory хранилище на `ConcurrentDictionary`. Данные сохр�
 
 Отдельный проект `tests/MiddleCsharp.Tests` на xUnit, ссылается на `src/MiddleCsharp`. Покрыто:
 
-- CRUD: создание (включая игнорирование `id` из запроса), чтение списка и по id, обновление, удаление;
+- CRUD: создание (включая игнорирование `id` из запроса), чтение списка и по id, обновление, удаление; возвращаемые объекты изолированы от внутреннего хранилища;
 - неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры;
-- пагинация: первая/средняя/последняя страница, страница за пределами, `pageSize` больше количества, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище.
+- пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
+- middleware: `400`/`404`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`.
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert), каждый тест работает со свежим экземпляром `EventService`:
+Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервиса работают со свежим экземпляром `EventService`:
 
 ```bash
 dotnet test
@@ -224,6 +240,8 @@ middle-csharp/
 │       └── middle-csharp.csproj
 ├── tests/
 │   └── MiddleCsharp.Tests/
+│       ├── Middleware/
+│       │   └── ExceptionHandlingMiddlewareTests.cs
 │       ├── Services/
 │       │   ├── EventServiceCrudTests.cs
 │       │   ├── EventServiceFailureTests.cs

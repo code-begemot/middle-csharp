@@ -65,6 +65,34 @@ public class EventServiceCrudTests
     }
 
     [Fact]
+    public void GetById_ReturnedEvent_IsDetachedFromStore()
+    {
+        // Arrange
+        var created = _service.Create(TestData.NewEvent("Original"));
+
+        // Act
+        var fetched = _service.GetById(created.Id);
+        fetched.Title = "Mutated";
+
+        // Assert
+        Assert.Equal("Original", _service.GetById(created.Id).Title);
+    }
+
+    [Fact]
+    public void GetAll_ReturnedItems_AreDetachedFromStore()
+    {
+        // Arrange
+        var created = _service.Create(TestData.NewEvent("Original"));
+
+        // Act
+        var item = Assert.Single(_service.GetAll(TestData.NoFilter, 1, 10).Items);
+        item.Title = "Mutated";
+
+        // Assert
+        Assert.Equal("Original", _service.GetById(created.Id).Title);
+    }
+
+    [Fact]
     public void Update_ExistingEvent_ReplacesAllFields()
     {
         // Arrange

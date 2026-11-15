@@ -7,6 +7,8 @@ namespace MiddleCsharp.Services;
 
 public class EventService : IEventService
 {
+    private const int MaxPageSize = 100;
+
     private readonly ConcurrentDictionary<Guid, Event> _events = new();
 
     public Event GetById(Guid id)
@@ -16,7 +18,7 @@ public class EventService : IEventService
             throw new EventNotFoundException(id);
         }
 
-        return evt;
+        return evt.Clone();
     }
 
     public PaginatedResult<Event> GetAll(EventFilter filter, int page, int pageSize)
@@ -26,9 +28,9 @@ public class EventService : IEventService
             throw new EventValidationException("Page must be greater than 0.");
         }
 
-        if (pageSize < 1)
+        if (pageSize < 1 || pageSize > MaxPageSize)
         {
-            throw new EventValidationException("PageSize must be greater than 0.");
+            throw new EventValidationException($"PageSize must be between 1 and {MaxPageSize}.");
         }
 
         IEnumerable<Event> query = _events.Values.ToList();
@@ -55,10 +57,10 @@ public class EventService : IEventService
             .ToList();
 
         var totalCount = ordered.Count;
-        var items = ordered
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
+        var skip = ((long)page - 1) * pageSize;
+        var items = skip >= totalCount
+            ? new List<Event>()
+            : ordered.Skip((int)skip).Take(pageSize).Select(e => e.Clone()).ToList();
 
         return new PaginatedResult<Event>
         {
@@ -74,25 +76,30 @@ public class EventService : IEventService
     {
         Validate(newEvent);
 
-        newEvent.Id = Guid.NewGuid();
-        _events[newEvent.Id] = newEvent;
-        return newEvent;
+        var stored = newEvent.Clone();
+        stored.Id = Guid.NewGuid();
+        _events[stored.Id] = stored;
+        return stored.Clone();
     }
 
     public void Update(Guid id, Event updatedEvent)
     {
         Validate(updatedEvent);
 
-        if (!_events.TryGetValue(id, out var existing))
-        {
-            throw new EventNotFoundException(id);
-        }
+        var replacement = updatedEvent.Clone();
+        replacement.Id = id;
 
-        updatedEvent.Id = id;
-
-        if (!_events.TryUpdate(id, updatedEvent, existing))
+        while (true)
         {
-            throw new EventNotFoundException(id);
+            if (!_events.TryGetValue(id, out var existing))
+            {
+                throw new EventNotFoundException(id);
+            }
+
+            if (_events.TryUpdate(id, replacement, existing))
+            {
+                return;
+            }
         }
     }
 

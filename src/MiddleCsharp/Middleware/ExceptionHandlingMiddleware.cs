@@ -30,11 +30,20 @@ public sealed class ExceptionHandlingMiddleware
 
     private async Task HandleAsync(HttpContext context, Exception exception)
     {
-        var (statusCode, title) = exception switch
+        var (statusCode, title, type) = exception switch
         {
-            EventValidationException => (StatusCodes.Status400BadRequest, "Validation failed"),
-            EventNotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
-            _ => (StatusCodes.Status500InternalServerError, "Internal server error")
+            EventValidationException => (
+                StatusCodes.Status400BadRequest,
+                "Validation failed",
+                "https://tools.ietf.org/html/rfc9110#section-15.5.1"),
+            EventNotFoundException => (
+                StatusCodes.Status404NotFound,
+                "Resource not found",
+                "https://tools.ietf.org/html/rfc9110#section-15.5.5"),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Internal server error",
+                "https://tools.ietf.org/html/rfc9110#section-15.6.1")
         };
 
         var unexpected = statusCode == StatusCodes.Status500InternalServerError;
@@ -60,6 +69,7 @@ public sealed class ExceptionHandlingMiddleware
 
         var problem = new ProblemDetails
         {
+            Type = type,
             Status = statusCode,
             Title = title,
             Detail = detail,

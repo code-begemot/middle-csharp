@@ -230,6 +230,43 @@ public class EventServiceQueryTests
     }
 
     [Fact]
+    public void Pagination_HugePage_ReturnsEmptyItemsInsteadOfFirstPage()
+    {
+        // Arrange
+        SeedFiveEvents();
+
+        // Act
+        var result = _service.GetAll(TestData.NoFilter, int.MaxValue, 100);
+
+        // Assert
+        Assert.Equal(5, result.TotalCount);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public void Pagination_PageSizeAboveMaximum_ThrowsValidation()
+    {
+        // Act & Assert
+        var exception = Assert.Throws<EventValidationException>(
+            () => _service.GetAll(TestData.NoFilter, 1, 101));
+
+        Assert.Equal("PageSize must be between 1 and 100.", exception.Message);
+    }
+
+    [Fact]
+    public void Pagination_PageSizeAtMaximum_IsAllowed()
+    {
+        // Arrange
+        SeedFiveEvents();
+
+        // Act
+        var result = _service.GetAll(TestData.NoFilter, 1, 100);
+
+        // Assert
+        Assert.Equal(5, result.Items.Count);
+    }
+
+    [Fact]
     public void Pagination_PageSizeLargerThanTotal_ReturnsAllItems()
     {
         // Arrange
