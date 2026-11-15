@@ -16,24 +16,28 @@ public class EventsController : ControllerBase
     }
 
     [HttpGet]
-    [ProducesResponseType(typeof(IEnumerable<EventResponse>), StatusCodes.Status200OK)]
-    public ActionResult<IEnumerable<EventResponse>> GetAll()
+    [ProducesResponseType(typeof(PaginatedResult<EventResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public ActionResult<PaginatedResult<EventResponse>> GetAll([FromQuery] GetEventsQuery query)
     {
-        return Ok(_eventService.GetAll().ToResponse());
+        var result = _eventService.GetAll(query.ToFilter(), query.Page, query.PageSize);
+        return Ok(result.ToResponse());
     }
 
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(EventResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public ActionResult<EventResponse> GetById(Guid id)
     {
-        var evt = _eventService.GetById(id);
-        return evt is null ? NotFound() : Ok(evt.ToResponse());
+        return Ok(_eventService.GetById(id).ToResponse());
     }
 
     [HttpPost]
     [ProducesResponseType(typeof(EventResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public ActionResult<EventResponse> Create([FromBody] CreateEventRequest request)
     {
         var created = _eventService.Create(request.ToEntity());
@@ -43,18 +47,21 @@ public class EventsController : ControllerBase
     [HttpPut("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public IActionResult Update(Guid id, [FromBody] UpdateEventRequest request)
     {
-        var success = _eventService.Update(id, request.ToEntity());
-        return success ? NoContent() : NotFound();
+        _eventService.Update(id, request.ToEntity());
+        return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public IActionResult Delete(Guid id)
     {
-        return _eventService.Delete(id) ? NoContent() : NotFound();
+        _eventService.Delete(id);
+        return NoContent();
     }
 }

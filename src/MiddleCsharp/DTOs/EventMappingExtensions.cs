@@ -31,4 +31,13 @@ public static class EventMappingExtensions
 
     public static IEnumerable<EventResponse> ToResponse(this IEnumerable<Event> events)
         => events.Select(ToResponse);
+
+    public static PaginatedResult<EventResponse> ToResponse(this PaginatedResult<Event> result) => new()
+    {
+        TotalCount = result.TotalCount,
+        Page = result.Page,
+        PageSize = result.PageSize,
+        TotalPages = result.TotalPages,
+        Items = result.Items.Select(ToResponse).ToList()
+    };
 }
