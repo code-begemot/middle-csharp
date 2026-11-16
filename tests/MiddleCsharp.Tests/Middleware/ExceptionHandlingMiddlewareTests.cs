@@ -72,9 +72,50 @@ public class ExceptionHandlingMiddlewareTests
         Assert.True(problem.Extensions.ContainsKey("traceId"));
     }
 
-    private static async Task<(HttpContext Context, ProblemDetails Problem)> InvokeAsync(Exception exception)
+    [Fact]
+    public async Task InvokeAsync_RequestTooLarge_Returns413ProblemDetails()
     {
-        var context = new DefaultHttpContext
+        // Arrange
+        var exception = new BadHttpRequestException(
+            "Request body too large.",
+            StatusCodes.Status413PayloadTooLarge);
+
+        // Act
+        var (context, problem) = await InvokeAsync(exception);
+
+        // Assert
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        Assert.StartsWith("application/problem+json", context.Response.ContentType!);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.Status);
+        Assert.Equal("Payload too large", problem.Title);
+        Assert.Equal("Request body is too large.", problem.Detail);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.14", problem.Type);
+        Assert.True(problem.Extensions.ContainsKey("traceId"));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ClientCanceledRequest_DoesNotWriteErrorResponse()
+    {
+        // Arrange
+        var context = CreateContext();
+        context.RequestAborted = new CancellationToken(canceled: true);
+
+        var middleware = new ExceptionHandlingMiddleware(
+            _ => Task.FromException(new OperationCanceledException(context.RequestAborted)),
+            NullLogger<ExceptionHandlingMiddleware>.Instance);
+
+        // Act
+        await middleware.InvokeAsync(context);
+
+        // Assert
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Null(context.Response.ContentType);
+        Assert.Equal(0, context.Response.Body.Length);
+    }
+
+    private static DefaultHttpContext CreateContext()
+    {
+        return new DefaultHttpContext
         {
             Request =
             {
@@ -86,6 +127,11 @@ public class ExceptionHandlingMiddlewareTests
                 Body = new MemoryStream()
             }
         };
+    }
+
+    private static async Task<(HttpContext Context, ProblemDetails Problem)> InvokeAsync(Exception exception)
+    {
+        var context = CreateContext();
 
         var middleware = new ExceptionHandlingMiddleware(
             _ => Task.FromException(exception),

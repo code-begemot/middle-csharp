@@ -7,8 +7,6 @@ namespace MiddleCsharp.Services;
 
 public class EventService : IEventService
 {
-    private const int MaxPageSize = 100;
-
     private readonly ConcurrentDictionary<Guid, Event> _events = new();
 
     public Event GetById(Guid id)
@@ -28,9 +26,14 @@ public class EventService : IEventService
             throw new EventValidationException("Page must be greater than 0.");
         }
 
-        if (pageSize < 1 || pageSize > MaxPageSize)
+        if (pageSize < 1 || pageSize > PaginationLimits.MaxPageSize)
         {
-            throw new EventValidationException($"PageSize must be between 1 and {MaxPageSize}.");
+            throw new EventValidationException($"PageSize must be between 1 and {PaginationLimits.MaxPageSize}.");
+        }
+
+        if (filter.From.HasValue && filter.To.HasValue && filter.From > filter.To)
+        {
+            throw new EventValidationException("From must be earlier than or equal to To.");
         }
 
         IEnumerable<Event> query = _events.Values.ToList();

@@ -8,16 +8,16 @@ public static class EventMappingExtensions
     {
         Title = request.Title,
         Description = request.Description,
-        StartAt = request.StartAt,
-        EndAt = request.EndAt
+        StartAt = request.StartAt ?? default,
+        EndAt = request.EndAt ?? default
     };
 
     public static Event ToEntity(this UpdateEventRequest request) => new()
     {
         Title = request.Title,
         Description = request.Description,
-        StartAt = request.StartAt,
-        EndAt = request.EndAt
+        StartAt = request.StartAt ?? default,
+        EndAt = request.EndAt ?? default
     };
 
     public static EventResponse ToResponse(this Event evt) => new()
