@@ -52,3 +52,16 @@ Content-Type: application/json
 
 ### Удалить событие
 DELETE {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+
+### Создать бронь на событие: 202 Accepted и Location
+# Подставь id события из ответа POST /events
+POST {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000/book
+
+### Статус брони: сначала Pending, после обработки Confirmed
+# Подставь id брони из ответа POST /events/{id}/book
+GET {{middle_csharp_HostAddress}}/bookings/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Бронь по несуществующему id: 404 в формате Problem Details
+GET {{middle_csharp_HostAddress}}/bookings/11111111-1111-1111-1111-111111111111
+Accept: application/json
