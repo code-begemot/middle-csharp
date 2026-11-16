@@ -21,8 +21,16 @@ builder.Services.AddSingleton<IEventService, EventService>();
 builder.Services.AddSingleton<IBookingStore, InMemoryBookingStore>();
 builder.Services.AddSingleton<IBookingService, BookingService>();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.Configure<BookingProcessingOptions>(
-    builder.Configuration.GetSection(BookingProcessingOptions.SectionName));
+builder.Services
+    .AddOptions<BookingProcessingOptions>()
+    .Bind(builder.Configuration.GetSection(BookingProcessingOptions.SectionName))
+    .Validate(
+        options => options.PollInterval > TimeSpan.Zero,
+        "BookingProcessing:PollInterval must be greater than zero.")
+    .Validate(
+        options => options.ProcessingDelay >= TimeSpan.Zero,
+        "BookingProcessing:ProcessingDelay must be zero or greater.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<BookingProcessor>();
 builder.Services.AddHostedService<BookingProcessingService>();
 

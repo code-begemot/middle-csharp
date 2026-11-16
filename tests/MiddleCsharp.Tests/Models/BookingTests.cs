@@ -69,6 +69,25 @@ public class BookingTests
     }
 
     [Fact]
+    public void CreatePending_DefaultCreatedAt_Throws()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => Booking.CreatePending(EventId, default));
+    }
+
+    [Fact]
+    public void Confirm_DefaultProcessedAt_Throws()
+    {
+        // Arrange
+        var booking = Booking.CreatePending(EventId, CreatedAt);
+
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => booking.Confirm(default));
+        Assert.Equal(BookingStatus.Pending, booking.Status);
+        Assert.Null(booking.ProcessedAt);
+    }
+
+    [Fact]
     public void Reject_AfterConfirmation_Throws()
     {
         // Arrange

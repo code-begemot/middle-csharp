@@ -2,7 +2,7 @@ namespace MiddleCsharp.Tests;
 
 internal sealed class FixedTimeProvider : TimeProvider
 {
-    private DateTimeOffset _utcNow;
+    private readonly DateTimeOffset _utcNow;
 
     public FixedTimeProvider(DateTimeOffset utcNow)
     {
@@ -10,6 +10,4 @@ internal sealed class FixedTimeProvider : TimeProvider
     }
 
     public override DateTimeOffset GetUtcNow() => _utcNow;
-
-    public void Advance(TimeSpan delta) => _utcNow += delta;
 }

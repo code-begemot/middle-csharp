@@ -1,6 +1,6 @@
 namespace MiddleCsharp.Exceptions;
 
-public sealed class BookingNotFoundException : Exception
+public sealed class BookingNotFoundException : NotFoundException
 {
     public BookingNotFoundException(Guid id)
         : base($"Booking with id '{id}' was not found.")

@@ -19,6 +19,8 @@ public class EventService : IEventService
         return evt.Clone();
     }
 
+    public bool Exists(Guid id) => _events.ContainsKey(id);
+
     public PaginatedResult<Event> GetAll(EventFilter filter, int page, int pageSize)
     {
         if (page < 1)

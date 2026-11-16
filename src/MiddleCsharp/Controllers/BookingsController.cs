@@ -5,6 +5,7 @@ using MiddleCsharp.Services;
 namespace MiddleCsharp.Controllers;
 
 [ApiController]
+[Produces("application/json")]
 [Route("bookings")]
 public class BookingsController : ControllerBase
 {
