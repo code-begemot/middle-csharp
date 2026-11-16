@@ -10,20 +10,16 @@ public abstract class EventRequestBase : IValidatableObject
     public string? Description { get; set; }
 
     [Required(ErrorMessage = "StartAt is required.")]
-    public DateTime StartAt { get; set; }
+    public DateTime? StartAt { get; set; }
 
     [Required(ErrorMessage = "EndAt is required.")]
-    public DateTime EndAt { get; set; }
+    public DateTime? EndAt { get; set; }
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (StartAt == default)
-            yield return new ValidationResult("StartAt is required.", new[] { nameof(StartAt) });
-
-        if (EndAt == default)
-            yield return new ValidationResult("EndAt is required.", new[] { nameof(EndAt) });
-
-        if (StartAt != default && EndAt != default && EndAt <= StartAt)
+        if (StartAt is { } startAt && EndAt is { } endAt && endAt <= startAt)
+        {
             yield return new ValidationResult("EndAt must be later than StartAt.", new[] { nameof(EndAt) });
+        }
     }
 }

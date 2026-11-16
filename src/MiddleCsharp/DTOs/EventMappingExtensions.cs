@@ -8,16 +8,16 @@ public static class EventMappingExtensions
     {
         Title = request.Title,
         Description = request.Description,
-        StartAt = request.StartAt,
-        EndAt = request.EndAt
+        StartAt = request.StartAt ?? default,
+        EndAt = request.EndAt ?? default
     };
 
     public static Event ToEntity(this UpdateEventRequest request) => new()
     {
         Title = request.Title,
         Description = request.Description,
-        StartAt = request.StartAt,
-        EndAt = request.EndAt
+        StartAt = request.StartAt ?? default,
+        EndAt = request.EndAt ?? default
     };
 
     public static EventResponse ToResponse(this Event evt) => new()
@@ -29,6 +29,12 @@ public static class EventMappingExtensions
         EndAt = evt.EndAt
     };
 
-    public static IEnumerable<EventResponse> ToResponse(this IEnumerable<Event> events)
-        => events.Select(ToResponse);
+    public static PaginatedResult<EventResponse> ToResponse(this PaginatedResult<Event> result) => new()
+    {
+        TotalCount = result.TotalCount,
+        Page = result.Page,
+        PageSize = result.PageSize,
+        TotalPages = result.TotalPages,
+        Items = result.Items.Select(ToResponse).ToList()
+    };
 }
