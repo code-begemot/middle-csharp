@@ -1,3 +1,5 @@
+using MiddleCsharp.BackgroundServices;
+using MiddleCsharp.DataAccess;
 using MiddleCsharp.Middleware;
 using MiddleCsharp.Services;
 
@@ -16,6 +18,13 @@ builder.Services.AddProblemDetails(options =>
 });
 
 builder.Services.AddSingleton<IEventService, EventService>();
+builder.Services.AddSingleton<IBookingStore, InMemoryBookingStore>();
+builder.Services.AddSingleton<IBookingService, BookingService>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<BookingProcessingOptions>(
+    builder.Configuration.GetSection(BookingProcessingOptions.SectionName));
+builder.Services.AddSingleton<BookingProcessor>();
+builder.Services.AddHostedService<BookingProcessingService>();
 
 var app = builder.Build();
 
