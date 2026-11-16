@@ -52,6 +52,25 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_BookingNotFound_Returns404ProblemDetails()
+    {
+        // Arrange
+        var exception = new BookingNotFoundException(EventId);
+
+        // Act
+        var (context, problem) = await InvokeAsync(exception);
+
+        // Assert
+        Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
+        Assert.StartsWith("application/problem+json", context.Response.ContentType!);
+        Assert.Equal(StatusCodes.Status404NotFound, problem.Status);
+        Assert.Equal("Resource not found", problem.Title);
+        Assert.Equal(exception.Message, problem.Detail);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.5", problem.Type);
+        Assert.True(problem.Extensions.ContainsKey("traceId"));
+    }
+
+    [Fact]
     public async Task InvokeAsync_UnexpectedException_Returns500WithoutInternalDetails()
     {
         // Arrange
