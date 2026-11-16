@@ -49,6 +49,11 @@ public sealed class ExceptionHandlingMiddleware
                 "Resource not found",
                 "https://tools.ietf.org/html/rfc9110#section-15.5.5",
                 exception.Message),
+            BookingNotFoundException => (
+                StatusCodes.Status404NotFound,
+                "Resource not found",
+                "https://tools.ietf.org/html/rfc9110#section-15.5.5",
+                exception.Message),
             BadHttpRequestException badRequest => (
                 badRequest.StatusCode,
                 badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge
