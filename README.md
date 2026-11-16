@@ -49,9 +49,11 @@ dotnet test           # запускает юнит-тесты сервиса и
 |---|---|---|---|---|
 | GET | `/events` | Список событий с фильтрацией и пагинацией | `200 OK` | `400`, `500` |
 | GET | `/events/{id}` | Событие по id | `200 OK` | `404`, `500` |
-| POST | `/events` | Создать событие | `201 Created` | `400`, `500` |
-| PUT | `/events/{id}` | Обновить событие целиком | `204 No Content` | `400`, `404`, `500` |
+| POST | `/events` | Создать событие | `201 Created` | `400`, `413`, `500` |
+| PUT | `/events/{id}` | Обновить событие целиком | `204 No Content` | `400`, `404`, `413`, `500` |
 | DELETE | `/events/{id}` | Удалить событие | `204 No Content` | `404`, `500` |
+
+Для неподдерживаемого HTTP-метода (например, `PATCH /events`) возвращается `405 Method Not Allowed`.
 
 ## Фильтрация и пагинация `GET /events`
 
@@ -105,14 +107,14 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 
 ## Формат ошибок
 
-Все ошибки, возникающие при обработке запроса в контроллерах и сервисах, отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Необработанные исключения перехватывает глобальный middleware `ExceptionHandlingMiddleware`.
-
-Если запрос не совпал ни с одним маршрутом (например, `/events/not-a-guid`), ASP.NET Core возвращает `404` без тела — это стандартный ответ маршрутизации, а не исключение из контроллера.
+Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, а ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`.
 
 | Код | Когда | Пример `title` |
 |---|---|---|
-| `400 Bad Request` | невалидная модель или query-параметры | `One or more validation errors occurred.` / `Validation failed` |
-| `404 Not Found` | событие с указанным id не найдено | `Resource not found` |
+| `400 Bad Request` | невалидная модель, query-параметры или фильтр `from > to` | `One or more validation errors occurred.` / `Validation failed` |
+| `404 Not Found` | событие с указанным id не найдено или маршрут не совпал | `Resource not found` / `Not Found` |
+| `405 Method Not Allowed` | неподдерживаемый HTTP-метод | `Method Not Allowed` |
+| `413 Payload Too Large` | тело запроса превышает лимит Kestrel | `Payload too large` |
 | `500 Internal Server Error` | непредвиденная ошибка | `Internal server error` |
 
 Пример ошибки `404`:
@@ -172,9 +174,12 @@ API принимает и возвращает DTO, а не доменную м�
 - `Title` — обязательное поле;
 - `StartAt` — обязательное поле;
 - `EndAt` — обязательное поле, должно быть **позже** `StartAt`;
-- `page` ≥ 1, `1 ≤ pageSize ≤ 100`.
+- `page` ≥ 1, `1 ≤ pageSize ≤ 100`;
+- если заданы оба фильтра `from` и `to`, то `from ≤ to`.
 
-Правила проверяются на двух уровнях: атрибутами DTO (даёт `400` до вызова сервиса) и в `EventService` (защищает бизнес-логику при прямом вызове и в тестах).
+Правила проверяются на двух уровнях: атрибутами DTO (дают `400` до вызова сервиса) и в `EventService` (защищают бизнес-логику при прямом вызове и в тестах). Проверка `from > to` выполняется в сервисе, поэтому такой запрос доходит до `ExceptionHandlingMiddleware` и возвращает `400`.
+
+При `PUT /events/{id}` тело сначала валидируется, а затем проверяется существование события. Поэтому невалидное тело вместе с несуществующим `id` даёт `400`, а не `404`.
 
 ### Пример запроса на создание события
 
@@ -199,9 +204,10 @@ In-memory хранилище на `ConcurrentDictionary`. Данные сохр�
 
 - CRUD: создание (включая игнорирование `id` из запроса), чтение списка и по id, обновление, удаление; возвращаемые объекты изолированы от внутреннего хранилища;
 - неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`;
-- фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры;
+- валидация DTO: обязательность дат, `EndAt <= StartAt`, валидный запрос;
+- фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
 - пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
-- middleware: `400`/`404`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`.
+- middleware: `400`/`404`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом.
 
 Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервиса работают со свежим экземпляром `EventService`:
 
@@ -235,11 +241,14 @@ middle-csharp/
 │       ├── Services/
 │       │   ├── IEventService.cs
 │       │   ├── EventService.cs
-│       │   └── EventFilter.cs
+│       │   ├── EventFilter.cs
+│       │   └── PaginationLimits.cs
 │       ├── Program.cs
 │       └── middle-csharp.csproj
 ├── tests/
 │   └── MiddleCsharp.Tests/
+│       ├── DTOs/
+│       │   └── EventRequestValidationTests.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddlewareTests.cs
 │       ├── Services/

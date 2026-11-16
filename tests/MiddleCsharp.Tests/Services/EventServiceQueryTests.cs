@@ -169,6 +169,19 @@ public class EventServiceQueryTests
     }
 
     [Fact]
+    public void FilterByDateRange_FromAfterTo_ThrowsValidation()
+    {
+        // Arrange
+        SeedSampleEvents();
+
+        // Act & Assert
+        var exception = Assert.Throws<EventValidationException>(
+            () => _service.GetAll(new EventFilter(null, Jan15, Jan10), 1, 10));
+
+        Assert.Equal("From must be earlier than or equal to To.", exception.Message);
+    }
+
+    [Fact]
     public void Pagination_FirstPage_ReturnsRequestedSize()
     {
         // Arrange
