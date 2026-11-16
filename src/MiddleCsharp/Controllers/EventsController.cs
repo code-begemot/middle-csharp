@@ -5,14 +5,17 @@ using MiddleCsharp.Services;
 namespace MiddleCsharp.Controllers;
 
 [ApiController]
+[Produces("application/json")]
 [Route("events")]
 public class EventsController : ControllerBase
 {
     private readonly IEventService _eventService;
+    private readonly IBookingService _bookingService;
 
-    public EventsController(IEventService eventService)
+    public EventsController(IEventService eventService, IBookingService bookingService)
     {
         _eventService = eventService;
+        _bookingService = bookingService;
     }
 
     [HttpGet]
@@ -55,6 +58,21 @@ public class EventsController : ControllerBase
     {
         _eventService.Update(id, request.ToEntity());
         return NoContent();
+    }
+
+    [HttpPost("{id:guid}/book")]
+    [ProducesResponseType(typeof(BookingInfo), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<ActionResult<BookingInfo>> Book(Guid id)
+    {
+        var booking = await _bookingService.CreateBookingAsync(id);
+
+        return AcceptedAtAction(
+            nameof(BookingsController.GetById),
+            "Bookings",
+            new { id = booking.Id },
+            booking);
     }
 
     [HttpDelete("{id:guid}")]

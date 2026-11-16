@@ -44,7 +44,7 @@ public sealed class ExceptionHandlingMiddleware
                 "Validation failed",
                 "https://tools.ietf.org/html/rfc9110#section-15.5.1",
                 exception.Message),
-            EventNotFoundException => (
+            NotFoundException => (
                 StatusCodes.Status404NotFound,
                 "Resource not found",
                 "https://tools.ietf.org/html/rfc9110#section-15.5.5",

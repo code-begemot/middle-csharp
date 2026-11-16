@@ -1,6 +1,6 @@
-# Middle C# — Events API
+# Middle C# — Events & Bookings API
 
-Учебный проект: REST API для управления событиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты.
+Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок.
 
 ## Требования
 
@@ -38,12 +38,12 @@ dotnet dev-certs https --trust
 
 ```bash
 dotnet build          # собирает решение целиком (API + тесты)
-dotnet test           # запускает юнит-тесты сервиса и middleware
+dotnet test           # запускает юнит-тесты сервисов, хранилища, middleware и фоновой обработки
 ```
 
 ## API
 
-Базовый путь: `/events`
+Ресурсы: `/events` и `/bookings`
 
 | Метод | Путь | Описание | Успех | Ошибки |
 |---|---|---|---|---|
@@ -52,6 +52,8 @@ dotnet test           # запускает юнит-тесты сервиса и
 | POST | `/events` | Создать событие | `201 Created` | `400`, `413`, `500` |
 | PUT | `/events/{id}` | Обновить событие целиком | `204 No Content` | `400`, `404`, `413`, `500` |
 | DELETE | `/events/{id}` | Удалить событие | `204 No Content` | `404`, `500` |
+| POST | `/events/{id}/book` | Создать бронь на событие | `202 Accepted` | `404`, `500` |
+| GET | `/bookings/{id}` | Текущий статус брони | `200 OK` | `404`, `500` |
 
 Для неподдерживаемого HTTP-метода (например, `PATCH /events`) возвращается `405 Method Not Allowed`.
 
@@ -105,6 +107,94 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 
 Если запрошена страница за пределами диапазона, возвращается `200` с пустым `items` и реальными `totalCount`/`totalPages`.
 
+## Бронирования
+
+Бронь создаётся по паттерну «быстрый ответ + отложенная обработка»: `POST /events/{id}/book` сразу возвращает `202 Accepted` с телом брони и заголовком `Location`, а подтверждение выполняет фоновый сервис.
+
+### Модель `Booking`
+
+| Поле | Тип | Обязательность | Описание |
+|---|---|---|---|
+| `Id` | `Guid` | да | Уникальный идентификатор брони, генерируется на сервере |
+| `EventId` | `Guid` | да | Идентификатор события, к которому относится бронь |
+| `Status` | `BookingStatus` | да | Текущий статус брони |
+| `CreatedAt` | `DateTime` | да | Время создания брони (UTC) |
+| `ProcessedAt` | `DateTime?` | нет | Время обработки брони фоновым сервисом |
+
+### Статусы `BookingStatus`
+
+| Статус | Значение |
+|---|---|
+| `Pending` | Бронь создана и ожидает обработки |
+| `Confirmed` | Бронь подтверждена фоновым сервисом |
+| `Rejected` | Бронь отклонена: событие было удалено до обработки брони |
+
+В JSON статус передаётся строкой: `"status": "Pending"`.
+
+### Создание брони `POST /events/{id}/book`
+
+Тело запроса не требуется. Если событие с указанным `id` не найдено, возвращается `404` в формате Problem Details.
+
+```bash
+curl -i -X POST http://localhost:5027/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/book
+```
+
+Ответ:
+
+```http
+HTTP/1.1 202 Accepted
+Content-Type: application/json; charset=utf-8
+Location: http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
+
+{
+  "id": "c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11",
+  "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "Pending",
+  "createdAt": "2025-01-10T10:00:00Z",
+  "processedAt": null
+}
+```
+
+`Location` указывает на `GET /bookings/{id}` — ресурс с текущим состоянием брони.
+
+### Получение брони `GET /bookings/{id}`
+
+```bash
+curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
+```
+
+Возвращает `200 OK` с текущим состоянием брони. Пока бронь не обработана — `"status": "Pending"` и `"processedAt": null`; после обработки — `"status": "Confirmed"` и заполненный `processedAt`. Для несуществующей брони — `404` в формате Problem Details.
+
+### Фоновая обработка
+
+`BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. Сервис:
+
+- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollInterval`, по умолчанию 1 секунда);
+- для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе;
+- переводит бронь в `Confirmed` и заполняет `ProcessedAt`; если событие к моменту обработки удалено, бронь переходит в `Rejected` с заполненным `ProcessedAt`;
+- обрабатывает брони последовательно, поэтому очередь из N броней занимает примерно N × `ProcessingDelay`;
+- логирует результат через `ILogger`, ошибка по одной брони не останавливает обработку остальных;
+- корректно завершается по `CancellationToken` при остановке приложения.
+
+Настройки можно переопределить в `appsettings.json`:
+
+```json
+"BookingProcessing": {
+  "PollInterval": "00:00:01",
+  "ProcessingDelay": "00:00:02"
+}
+```
+
+Некорректные значения (`PollInterval` ≤ 0 или `ProcessingDelay` < 0) останавливают запуск приложения с ошибкой валидации настроек.
+
+### Сценарий целиком
+
+1. `POST /events` — создать событие, запомнить `id`.
+2. `POST /events/{id}/book` — получить `202 Accepted`, тело брони и `Location`.
+3. Сразу выполнить `GET /bookings/{bookingId}` — статус `Pending`, `processedAt` пустой.
+4. Подождать 2–3 секунды и повторить запрос — статус `Confirmed`, `processedAt` заполнен.
+5. Если удалить событие до обработки брони, она перейдёт в `Rejected` с заполненным `processedAt`.
+
 ## Формат ошибок
 
 Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, а ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`.
@@ -112,7 +202,7 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 | Код | Когда | Пример `title` |
 |---|---|---|
 | `400 Bad Request` | невалидная модель, query-параметры или фильтр `from > to` | `One or more validation errors occurred.` / `Validation failed` |
-| `404 Not Found` | событие с указанным id не найдено или маршрут не совпал | `Resource not found` / `Not Found` |
+| `404 Not Found` | событие или бронь с указанным id не найдены, либо маршрут не совпал | `Resource not found` / `Not Found` |
 | `405 Method Not Allowed` | неподдерживаемый HTTP-метод | `Method Not Allowed` |
 | `413 Payload Too Large` | тело запроса превышает лимит Kestrel | `Payload too large` |
 | `500 Internal Server Error` | непредвиденная ошибка | `Internal server error` |
@@ -168,6 +258,7 @@ API принимает и возвращает DTO, а не доменную м�
 - **`EventResponse`** — ответ `GET /events/{id}` и `POST /events`.
 - **`PaginatedResult<T>`** — обёртка для `GET /events`.
 - **`GetEventsQuery`** — query-параметры `GET /events` (`title`, `from`, `to`, `page`, `pageSize`).
+- **`BookingInfo`** — ответ `POST /events/{id}/book` и `GET /bookings/{id}`. Поля: `id`, `eventId`, `status`, `createdAt`, `processedAt`.
 
 ### Правила валидации
 
@@ -196,7 +287,7 @@ curl -X POST http://localhost:5027/events \
 
 ## Хранилище
 
-In-memory хранилище на `ConcurrentDictionary`. Данные сохраняются только на время работы процесса и очищаются при перезапуске.
+In-memory хранилища на `ConcurrentDictionary`: отдельно события (`EventService`) и бронирования (`InMemoryBookingStore`). Данные сохраняются только на время работы процесса и очищаются при перезапуске. Наружу сервисы и хранилище отдают копии объектов, поэтому изменение полученного DTO не влияет на сохранённые данные.
 
 ## Тесты
 
@@ -207,9 +298,17 @@ In-memory хранилище на `ConcurrentDictionary`. Данные сохр�
 - валидация DTO: обязательность дат, `EndAt <= StartAt`, валидный запрос;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
 - пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
-- middleware: `400`/`404`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом.
+- middleware: `400`/`404`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
+- сущность `Booking`: создание в статусе `Pending`, `Confirm`/`Reject`, заполнение `ProcessedAt`, запрет повторной обработки, проверка обязательных дат;
+- хранилище броней: добавление и чтение, изоляция копий, выборка только `Pending`, атомарная смена статуса;
+- `EventService.Exists`: существующее, удалённое и неизвестное событие;
+- `BookingService`: создание брони для существующего события, уникальные `Id` у нескольких броней, чтение по `Id`, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
+- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, обработка нескольких броней, пропуск уже обработанных броней, отказ брони удалённого события, продолжение обработки после ошибки хранилища, отмена по `CancellationToken` (в том числе посреди пачки);
+- `BookingProcessingService`: запуск опроса, обработка брони и корректная остановка по `CancellationToken`.
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервиса работают со свежим экземпляром `EventService`:
+Всего 89 тестов.
+
+Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`.
 
 ```bash
 dotnet test
@@ -221,9 +320,19 @@ dotnet test
 middle-csharp/
 ├── src/
 │   └── MiddleCsharp/
+│       ├── BackgroundServices/
+│       │   ├── BookingProcessingOptions.cs
+│       │   ├── BookingProcessingService.cs
+│       │   └── BookingProcessor.cs
 │       ├── Controllers/
+│       │   ├── BookingsController.cs
 │       │   └── EventsController.cs
+│       ├── DataAccess/
+│       │   ├── IBookingStore.cs
+│       │   └── InMemoryBookingStore.cs
 │       ├── DTOs/
+│       │   ├── BookingInfo.cs
+│       │   ├── BookingMappingExtensions.cs
 │       │   ├── CreateEventRequest.cs
 │       │   ├── UpdateEventRequest.cs
 │       │   ├── EventResponse.cs
@@ -232,13 +341,19 @@ middle-csharp/
 │       │   ├── PaginatedResult.cs
 │       │   └── EventMappingExtensions.cs
 │       ├── Exceptions/
+│       │   ├── BookingNotFoundException.cs
 │       │   ├── EventNotFoundException.cs
-│       │   └── EventValidationException.cs
+│       │   ├── EventValidationException.cs
+│       │   └── NotFoundException.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
 │       ├── Models/
+│       │   ├── Booking.cs
+│       │   ├── BookingStatus.cs
 │       │   └── Event.cs
 │       ├── Services/
+│       │   ├── IBookingService.cs
+│       │   ├── BookingService.cs
 │       │   ├── IEventService.cs
 │       │   ├── EventService.cs
 │       │   ├── EventFilter.cs
@@ -247,14 +362,23 @@ middle-csharp/
 │       └── middle-csharp.csproj
 ├── tests/
 │   └── MiddleCsharp.Tests/
+│       ├── BackgroundServices/
+│       │   ├── BookingProcessingServiceTests.cs
+│       │   └── BookingProcessorTests.cs
+│       ├── DataAccess/
+│       │   └── InMemoryBookingStoreTests.cs
 │       ├── DTOs/
 │       │   └── EventRequestValidationTests.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddlewareTests.cs
+│       ├── Models/
+│       │   └── BookingTests.cs
 │       ├── Services/
+│       │   ├── BookingServiceTests.cs
 │       │   ├── EventServiceCrudTests.cs
 │       │   ├── EventServiceFailureTests.cs
 │       │   └── EventServiceQueryTests.cs
+│       ├── FixedTimeProvider.cs
 │       ├── TestData.cs
 │       └── MiddleCsharp.Tests.csproj
 ├── middle-csharp.http

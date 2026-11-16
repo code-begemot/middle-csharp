@@ -36,6 +36,28 @@ public class EventServiceCrudTests
     }
 
     [Fact]
+    public void Exists_ExistingEvent_ReturnsTrue()
+    {
+        // Arrange
+        var created = _service.Create(TestData.NewEvent());
+
+        // Act & Assert
+        Assert.True(_service.Exists(created.Id));
+    }
+
+    [Fact]
+    public void Exists_UnknownOrDeletedEvent_ReturnsFalse()
+    {
+        // Arrange
+        var created = _service.Create(TestData.NewEvent());
+        _service.Delete(created.Id);
+
+        // Act & Assert
+        Assert.False(_service.Exists(created.Id));
+        Assert.False(_service.Exists(Guid.NewGuid()));
+    }
+
+    [Fact]
     public void GetAll_ReturnsAllStoredEvents()
     {
         // Arrange
