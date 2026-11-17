@@ -30,7 +30,8 @@ public class EventRequestValidationTests
         {
             Title = "Meeting",
             StartAt = new DateTime(2025, 1, 10, 11, 0, 0),
-            EndAt = new DateTime(2025, 1, 10, 10, 0, 0)
+            EndAt = new DateTime(2025, 1, 10, 10, 0, 0),
+            TotalSeats = 10
         };
 
         // Act
@@ -41,7 +42,7 @@ public class EventRequestValidationTests
     }
 
     [Fact]
-    public void CreateEventRequest_Valid_IsValid()
+    public void CreateEventRequest_MissingTotalSeats_IsInvalid()
     {
         // Arrange
         var request = new CreateEventRequest
@@ -49,6 +50,46 @@ public class EventRequestValidationTests
             Title = "Meeting",
             StartAt = new DateTime(2025, 1, 10, 10, 0, 0),
             EndAt = new DateTime(2025, 1, 10, 11, 0, 0)
+        };
+
+        // Act
+        var results = Validate(request);
+
+        // Assert
+        Assert.Contains(results, result => result.ErrorMessage == "TotalSeats is required.");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void CreateEventRequest_NonPositiveTotalSeats_IsInvalid(int totalSeats)
+    {
+        // Arrange
+        var request = new CreateEventRequest
+        {
+            Title = "Meeting",
+            StartAt = new DateTime(2025, 1, 10, 10, 0, 0),
+            EndAt = new DateTime(2025, 1, 10, 11, 0, 0),
+            TotalSeats = totalSeats
+        };
+
+        // Act
+        var results = Validate(request);
+
+        // Assert
+        Assert.Contains(results, result => result.ErrorMessage == "TotalSeats must be greater than 0.");
+    }
+
+    [Fact]
+    public void CreateEventRequest_Valid_IsValid()
+    {
+        // Arrange
+        var request = new CreateEventRequest
+        {
+            Title = "Meeting",
+            StartAt = new DateTime(2025, 1, 10, 10, 0, 0),
+            EndAt = new DateTime(2025, 1, 10, 11, 0, 0),
+            TotalSeats = 10
         };
 
         // Act

@@ -81,8 +81,14 @@ public class EventService : IEventService
     {
         Validate(newEvent);
 
+        if (newEvent.TotalSeats <= 0)
+        {
+            throw new EventValidationException("TotalSeats must be greater than 0.");
+        }
+
         var stored = newEvent.Clone();
         stored.Id = Guid.NewGuid();
+        stored.AvailableSeats = stored.TotalSeats;
         _events[stored.Id] = stored;
         return stored.Clone();
     }
@@ -100,6 +106,51 @@ public class EventService : IEventService
             {
                 throw new EventNotFoundException(id);
             }
+
+            replacement.TotalSeats = existing.TotalSeats;
+            replacement.AvailableSeats = existing.AvailableSeats;
+
+            if (_events.TryUpdate(id, replacement, existing))
+            {
+                return;
+            }
+        }
+    }
+
+    public bool TryReserveSeats(Guid id, int count = 1)
+    {
+        while (true)
+        {
+            if (!_events.TryGetValue(id, out var existing))
+            {
+                throw new EventNotFoundException(id);
+            }
+
+            var replacement = existing.Clone();
+
+            if (!replacement.TryReserveSeats(count))
+            {
+                return false;
+            }
+
+            if (_events.TryUpdate(id, replacement, existing))
+            {
+                return true;
+            }
+        }
+    }
+
+    public void ReleaseSeats(Guid id, int count = 1)
+    {
+        while (true)
+        {
+            if (!_events.TryGetValue(id, out var existing))
+            {
+                throw new EventNotFoundException(id);
+            }
+
+            var replacement = existing.Clone();
+            replacement.ReleaseSeats(count);
 
             if (_events.TryUpdate(id, replacement, existing))
             {
