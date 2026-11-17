@@ -24,6 +24,8 @@ public sealed class BookingService : IBookingService
 
     public Task<BookingInfo> CreateBookingAsync(Guid eventId)
     {
+        Booking booking;
+
         lock (_bookingLock)
         {
             if (!_eventService.TryReserveSeats(eventId))
@@ -31,7 +33,7 @@ public sealed class BookingService : IBookingService
                 throw new NoAvailableSeatsException();
             }
 
-            var booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
+            booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
 
             try
             {
@@ -42,9 +44,9 @@ public sealed class BookingService : IBookingService
                 _eventService.ReleaseSeats(eventId);
                 throw;
             }
-
-            return Task.FromResult(booking.ToInfo());
         }
+
+        return Task.FromResult(booking.ToInfo());
     }
 
     public Task<BookingInfo> GetBookingByIdAsync(Guid bookingId)

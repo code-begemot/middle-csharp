@@ -38,9 +38,13 @@ public sealed class BookingProcessor
             return 0;
         }
 
+        var bookingIds = string.Join(", ", pending.Select(booking => booking.Id));
+
         _logger.LogInformation(
-            "Processing {Count} pending bookings in parallel",
-            pending.Count);
+            "Processing {Count} pending {BookingLabel} in parallel: {BookingIds}",
+            pending.Count,
+            pending.Count == 1 ? "booking" : "bookings",
+            bookingIds);
 
         var tasks = pending.Select(booking => ProcessBookingAsync(booking, cancellationToken));
         var results = await Task.WhenAll(tasks);
