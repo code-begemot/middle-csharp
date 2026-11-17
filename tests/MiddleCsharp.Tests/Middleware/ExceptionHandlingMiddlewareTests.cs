@@ -71,6 +71,26 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_NoAvailableSeats_Returns409ProblemDetails()
+    {
+        // Arrange
+        var exception = new NoAvailableSeatsException();
+
+        // Act
+        var (context, problem) = await InvokeAsync(exception);
+
+        // Assert
+        Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
+        Assert.StartsWith("application/problem+json", context.Response.ContentType!);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
+        Assert.Equal("Conflict", problem.Title);
+        Assert.Equal(exception.Message, problem.Detail);
+        Assert.Equal($"/events/{EventId}", problem.Instance);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.10", problem.Type);
+        Assert.True(problem.Extensions.ContainsKey("traceId"));
+    }
+
+    [Fact]
     public async Task InvokeAsync_UnexpectedException_Returns500WithoutInternalDetails()
     {
         // Arrange
