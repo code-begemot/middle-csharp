@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MiddleCsharp.BackgroundServices;
@@ -71,6 +72,37 @@ public class BookingProcessorTests
     }
 
     [Fact]
+    public async Task ProcessPendingAsync_MultiplePendingBookings_ProcessesThemInParallel()
+    {
+        // Arrange
+        var eventId = CreateEvent();
+        var bookings = Enumerable.Range(0, 4)
+            .Select(_ => Booking.CreatePending(eventId, CreatedAt))
+            .ToList();
+
+        foreach (var booking in bookings)
+        {
+            _store.Add(booking);
+        }
+
+        var processor = CreateProcessor(TimeSpan.FromMilliseconds(300));
+
+        // Act
+        var stopwatch = Stopwatch.StartNew();
+        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
+        stopwatch.Stop();
+
+        // Assert
+        Assert.Equal(4, processed);
+        Assert.All(
+            bookings,
+            booking => Assert.Equal(BookingStatus.Confirmed, _store.GetById(booking.Id)!.Status));
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(900),
+            $"Processing took {stopwatch.ElapsedMilliseconds} ms, expected parallel execution.");
+    }
+
+    [Fact]
     public async Task ProcessPendingAsync_AlreadyProcessedBooking_IsSkipped()
     {
         // Arrange
@@ -112,15 +144,14 @@ public class BookingProcessorTests
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_StoreFailure_ContinuesWithRemainingBookings()
+    public async Task ProcessPendingAsync_ConfirmFailure_RejectsBookingAndReleasesSeat()
     {
         // Arrange
-        var eventId = CreateEvent();
-        var failing = Booking.CreatePending(eventId, CreatedAt);
-        var healthy = Booking.CreatePending(eventId, CreatedAt);
-        var store = new ThrowingStore { ThrowingBookingId = failing.Id };
-        store.Add(failing);
-        store.Add(healthy);
+        var eventId = CreateEvent(totalSeats: 2);
+        _eventService.TryReserveSeats(eventId);
+        var booking = Booking.CreatePending(eventId, CreatedAt);
+        var store = new FailingOnConfirmStore { FailingBookingId = booking.Id };
+        store.Add(booking);
         var processor = CreateProcessor(TimeSpan.Zero, store);
 
         // Act
@@ -128,8 +159,26 @@ public class BookingProcessorTests
 
         // Assert
         Assert.Equal(1, processed);
-        Assert.Equal(BookingStatus.Pending, store.GetById(failing.Id)!.Status);
-        Assert.Equal(BookingStatus.Confirmed, store.GetById(healthy.Id)!.Status);
+        Assert.Equal(BookingStatus.Rejected, store.GetById(booking.Id)!.Status);
+        Assert.Equal(2, _eventService.GetById(eventId).AvailableSeats);
+    }
+
+    [Fact]
+    public async Task ProcessPendingAsync_ConfirmedBooking_KeepsReservedSeat()
+    {
+        // Arrange
+        var eventId = CreateEvent(totalSeats: 2);
+        _eventService.TryReserveSeats(eventId);
+        var booking = Booking.CreatePending(eventId, CreatedAt);
+        _store.Add(booking);
+        var processor = CreateProcessor(TimeSpan.Zero);
+
+        // Act
+        await processor.ProcessPendingAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(BookingStatus.Confirmed, _store.GetById(booking.Id)!.Status);
+        Assert.Equal(1, _eventService.GetById(eventId).AvailableSeats);
     }
 
     [Fact]
@@ -150,7 +199,7 @@ public class BookingProcessorTests
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_CancellationMidBatch_LeavesRemainingBookingsPending()
+    public async Task ProcessPendingAsync_CancellationMidBatch_LeavesBookingsPending()
     {
         // Arrange
         var eventId = CreateEvent();
@@ -163,30 +212,18 @@ public class BookingProcessorTests
 
         // Act
         var processing = processor.ProcessPendingAsync(cancellationTokenSource.Token);
-
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (_store.GetById(first.Id)!.Status == BookingStatus.Pending &&
-               _store.GetById(second.Id)!.Status == BookingStatus.Pending &&
-               DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10);
-        }
-
+        await Task.Delay(50);
         cancellationTokenSource.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
 
         // Assert
-        var statuses = new[]
-        {
-            _store.GetById(first.Id)!.Status,
-            _store.GetById(second.Id)!.Status
-        };
-        Assert.Contains(BookingStatus.Confirmed, statuses);
-        Assert.Contains(BookingStatus.Pending, statuses);
+        Assert.Equal(BookingStatus.Pending, _store.GetById(first.Id)!.Status);
+        Assert.Equal(BookingStatus.Pending, _store.GetById(second.Id)!.Status);
     }
 
-    private Guid CreateEvent() => _eventService.Create(TestData.NewEvent()).Id;
+    private Guid CreateEvent(int totalSeats = 10) =>
+        _eventService.Create(TestData.NewEvent(totalSeats: totalSeats)).Id;
 
     private BookingProcessor CreateProcessor(TimeSpan processingDelay, IBookingStore? store = null)
     {
@@ -203,11 +240,11 @@ public class BookingProcessorTests
             NullLogger<BookingProcessor>.Instance);
     }
 
-    private sealed class ThrowingStore : IBookingStore
+    private sealed class FailingOnConfirmStore : IBookingStore
     {
         private readonly InMemoryBookingStore _inner = new();
 
-        public required Guid ThrowingBookingId { get; init; }
+        public required Guid FailingBookingId { get; init; }
 
         public void Add(Booking booking) => _inner.Add(booking);
 
@@ -221,7 +258,7 @@ public class BookingProcessorTests
             BookingStatus newStatus,
             DateTime processedAt)
         {
-            if (id == ThrowingBookingId)
+            if (id == FailingBookingId && newStatus == BookingStatus.Confirmed)
             {
                 throw new InvalidOperationException("Simulated store failure.");
             }
