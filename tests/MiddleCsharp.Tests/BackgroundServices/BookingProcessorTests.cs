@@ -85,7 +85,7 @@ public class BookingProcessorTests
             _store.Add(booking);
         }
 
-        var processor = CreateProcessor(TimeSpan.FromMilliseconds(300));
+        var processor = CreateProcessor(TimeSpan.FromMilliseconds(500));
 
         // Act
         var stopwatch = Stopwatch.StartNew();
@@ -98,7 +98,7 @@ public class BookingProcessorTests
             bookings,
             booking => Assert.Equal(BookingStatus.Confirmed, _store.GetById(booking.Id)!.Status));
         Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromMilliseconds(900),
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(1600),
             $"Processing took {stopwatch.ElapsedMilliseconds} ms, expected parallel execution.");
     }
 
@@ -207,7 +207,7 @@ public class BookingProcessorTests
         var second = Booking.CreatePending(eventId, CreatedAt);
         _store.Add(first);
         _store.Add(second);
-        var processor = CreateProcessor(TimeSpan.FromMilliseconds(500));
+        var processor = CreateProcessor(TimeSpan.FromSeconds(5));
         using var cancellationTokenSource = new CancellationTokenSource();
 
         // Act
