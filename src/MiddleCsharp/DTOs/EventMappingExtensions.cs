@@ -9,7 +9,8 @@ public static class EventMappingExtensions
         Title = request.Title,
         Description = request.Description,
         StartAt = request.StartAt ?? default,
-        EndAt = request.EndAt ?? default
+        EndAt = request.EndAt ?? default,
+        TotalSeats = request.TotalSeats ?? default
     };
 
     public static Event ToEntity(this UpdateEventRequest request) => new()
@@ -26,7 +27,9 @@ public static class EventMappingExtensions
         Title = evt.Title,
         Description = evt.Description,
         StartAt = evt.StartAt,
-        EndAt = evt.EndAt
+        EndAt = evt.EndAt,
+        TotalSeats = evt.TotalSeats,
+        AvailableSeats = evt.AvailableSeats
     };
 
     public static PaginatedResult<EventResponse> ToResponse(this PaginatedResult<Event> result) => new()

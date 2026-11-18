@@ -14,12 +14,15 @@ internal static class TestData
         string title = "Meeting",
         DateTime? startAt = null,
         DateTime? endAt = null,
-        Guid? id = null) => new()
-    {
-        Id = id ?? Guid.Empty,
-        Title = title,
-        Description = "Sprint planning",
-        StartAt = startAt ?? DefaultStartAt,
-        EndAt = endAt ?? DefaultEndAt
-    };
+        Guid? id = null,
+        int totalSeats = 10) => new()
+        {
+            Id = id ?? Guid.Empty,
+            Title = title,
+            Description = "Sprint planning",
+            StartAt = startAt ?? DefaultStartAt,
+            EndAt = endAt ?? DefaultEndAt,
+            TotalSeats = totalSeats,
+            AvailableSeats = totalSeats
+        };
 }

@@ -7,6 +7,7 @@ namespace MiddleCsharp.Services;
 
 public sealed class BookingService : IBookingService
 {
+    private readonly object _bookingLock = new();
     private readonly IEventService _eventService;
     private readonly IBookingStore _bookingStore;
     private readonly TimeProvider _timeProvider;
@@ -23,10 +24,27 @@ public sealed class BookingService : IBookingService
 
     public Task<BookingInfo> CreateBookingAsync(Guid eventId)
     {
-        _eventService.GetById(eventId);
+        Booking booking;
 
-        var booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
-        _bookingStore.Add(booking);
+        lock (_bookingLock)
+        {
+            if (!_eventService.TryReserveSeats(eventId))
+            {
+                throw new NoAvailableSeatsException();
+            }
+
+            booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
+
+            try
+            {
+                _bookingStore.Add(booking);
+            }
+            catch
+            {
+                _eventService.ReleaseSeats(eventId);
+                throw;
+            }
+        }
 
         return Task.FromResult(booking.ToInfo());
     }

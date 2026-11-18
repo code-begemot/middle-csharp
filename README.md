@@ -1,6 +1,6 @@
 # Middle C# — Events & Bookings API
 
-Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок.
+Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней.
 
 ## Требования
 
@@ -52,10 +52,24 @@ dotnet test           # запускает юнит-тесты сервисов,
 | POST | `/events` | Создать событие | `201 Created` | `400`, `413`, `500` |
 | PUT | `/events/{id}` | Обновить событие целиком | `204 No Content` | `400`, `404`, `413`, `500` |
 | DELETE | `/events/{id}` | Удалить событие | `204 No Content` | `404`, `500` |
-| POST | `/events/{id}/book` | Создать бронь на событие | `202 Accepted` | `404`, `500` |
+| POST | `/events/{id}/book` | Создать бронь на событие | `202 Accepted` | `404`, `409`, `500` |
 | GET | `/bookings/{id}` | Текущий статус брони | `200 OK` | `404`, `500` |
 
 Для неподдерживаемого HTTP-метода (например, `PATCH /events`) возвращается `405 Method Not Allowed`.
+
+## Модель `Event`
+
+| Поле | Тип | Обязательность | Описание |
+|---|---|---|---|
+| `Id` | `Guid` | да | Уникальный идентификатор, генерируется на сервере |
+| `Title` | `string` | да | Название события |
+| `Description` | `string?` | нет | Описание |
+| `StartAt` | `DateTime` | да | Начало события |
+| `EndAt` | `DateTime` | да | Окончание события, строго позже `StartAt` |
+| `TotalSeats` | `int` | да | Общее количество мест на событии, строго больше 0 |
+| `AvailableSeats` | `int` | да | Текущее количество свободных мест |
+
+При создании события `AvailableSeats` равно `TotalSeats`. Каждая успешная бронь уменьшает `AvailableSeats` на 1; если мест нет, возвращается `409 Conflict`. Место возвращается в пул, если бронь отклонена из-за ошибки обработки. Через `PUT /events/{id}` ёмкость не меняется: `TotalSeats` и `AvailableSeats` сохраняются из текущего состояния события.
 
 ## Фильтрация и пагинация `GET /events`
 
@@ -93,7 +107,9 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
       "title": "Meeting",
       "description": "Sprint planning",
       "startAt": "2025-01-10T10:00:00",
-      "endAt": "2025-01-10T11:00:00"
+      "endAt": "2025-01-10T11:00:00",
+      "totalSeats": 10,
+      "availableSeats": 9
     }
   ]
 }
@@ -127,13 +143,13 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 |---|---|
 | `Pending` | Бронь создана и ожидает обработки |
 | `Confirmed` | Бронь подтверждена фоновым сервисом |
-| `Rejected` | Бронь отклонена: событие было удалено до обработки брони |
+| `Rejected` | Бронь отклонена: событие удалено до обработки или при обработке произошла ошибка |
 
 В JSON статус передаётся строкой: `"status": "Pending"`.
 
 ### Создание брони `POST /events/{id}/book`
 
-Тело запроса не требуется. Если событие с указанным `id` не найдено, возвращается `404` в формате Problem Details.
+Тело запроса не требуется. Если событие с указанным `id` не найдено, возвращается `404` в формате Problem Details. Если свободных мест не осталось, возвращается `409 Conflict` — новая бронь не создаётся и место не резервируется.
 
 ```bash
 curl -i -X POST http://localhost:5027/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/book
@@ -157,6 +173,22 @@ Location: http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 `Location` указывает на `GET /bookings/{id}` — ресурс с текущим состоянием брони.
 
+Если места закончились:
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json; charset=utf-8
+
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "No available seats for this event",
+  "instance": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/book",
+  "traceId": "0HNQ35B05HMII:00000003"
+}
+```
+
 ### Получение брони `GET /bookings/{id}`
 
 ```bash
@@ -169,42 +201,79 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 `BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. Сервис:
 
-- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollInterval`, по умолчанию 1 секунда);
-- для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе;
-- переводит бронь в `Confirmed` и заполняет `ProcessedAt`; если событие к моменту обработки удалено, бронь переходит в `Rejected` с заполненным `ProcessedAt`;
-- обрабатывает брони последовательно, поэтому очередь из N броней занимает примерно N × `ProcessingDelay`;
-- логирует результат через `ILogger`, ошибка по одной брони не останавливает обработку остальных;
-- корректно завершается по `CancellationToken` при остановке приложения.
+- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollingInterval`, по умолчанию 1 секунда);
+- передаёт всю пачку `Pending`-броней в `BookingProcessor`;
+- обрабатывает брони **параллельно**: для каждой запускается отдельная задача, результаты собираются через `Task.WhenAll`;
+- для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе. Задержка выполняется до захвата семафора, поэтому пачка из N броней занимает примерно `ProcessingDelay`, а не N × `ProcessingDelay`;
+- под семафором `SemaphoreSlim(1, 1)` проверяет, существует ли событие, и переводит бронь в `Confirmed` с заполнением `ProcessedAt`;
+- если событие к моменту обработки удалено, бронь переходит в `Rejected` с заполненным `ProcessedAt`;
+- если при обработке произошла непредвиденная ошибка, бронь переводится в `Rejected`, а зарезервированное место возвращается в событие;
+- логирует старт пачки с количеством и id броней, подтверждение, отказ и ошибки через `ILogger`; сбой одной брони не останавливает остальные;
+- корректно завершается по `CancellationToken` при остановке приложения: незавершённые брони остаются `Pending`.
 
 Настройки можно переопределить в `appsettings.json`:
 
 ```json
 "BookingProcessing": {
-  "PollInterval": "00:00:01",
+  "PollingInterval": "00:00:01",
   "ProcessingDelay": "00:00:02"
 }
 ```
 
-Некорректные значения (`PollInterval` ≤ 0 или `ProcessingDelay` < 0) останавливают запуск приложения с ошибкой валидации настроек.
+Некорректные значения (`PollingInterval` ≤ 0 или `ProcessingDelay` < 0) останавливают запуск приложения с ошибкой валидации настроек.
+
+### Синхронизация и защита от овербукинга
+
+`BookingService` — синглтон, поэтому все запросы на бронирование проходят через один `private readonly object _bookingLock`. Под `lock` выполняется критическая секция:
+
+1. проверка свободных мест и их резерв (`TryReserveSeats`);
+2. создание и сохранение брони.
+
+Если мест нет, `TryReserveSeats` возвращает `false`, и сервис выбрасывает `NoAvailableSeatsException`, которую `ExceptionHandlingMiddleware` превращает в `409 Conflict`. Чтение брони (`GET /bookings/{id}`) не блокируется. Если сохранение брони не удалось, зарезервированное место возвращается через `ReleaseSeats`.
+
+В фоновой обработке используется `SemaphoreSlim(1, 1)`: `lock` нельзя применять вместе с `await`, а семафор умеет асинхронно ждать. Он защищает обновление статуса брони и возврат места при отказе.
+
+Почему `lock` + `SemaphoreSlim`, а не только `ConcurrentDictionary`: конкурентная проблема не в отдельной операции, а в паре «прочитать свободные места → решить, что место есть → создать бронь». Без блокировки два потока могут одновременно увидеть одно и то же свободное место и создать две брони. `ConcurrentDictionary` делает атомарными отдельные операции над словарём, но не эту последовательность.
+
+Сценарий овербукинга: событие на 3 места, 5 одновременных запросов на бронь. Ровно 3 запроса получают `202 Accepted`, остальные 2 — `409 Conflict`; `AvailableSeats` в итоге равно 0, а количество броней не превышает `TotalSeats`.
+
+Пример для bash (Git Bash / WSL; id события возьмите из ответа `POST /events`):
+
+```bash
+EVENT_ID=3fa85f64-5717-4562-b3fc-2c963f66afa6  # подставьте id из ответа POST /events
+
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -X POST "http://localhost:5027/events/$EVENT_ID/book" &
+done
+wait
+
+curl -s "http://localhost:5027/events/$EVENT_ID"
+```
+
+Ожидаемо: три ответа `202`, два — `409` (порядок вывода может отличаться), в событии `"availableSeats": 0`.
 
 ### Сценарий целиком
 
-1. `POST /events` — создать событие, запомнить `id`.
+1. `POST /events` — создать событие с `totalSeats`, запомнить `id`.
 2. `POST /events/{id}/book` — получить `202 Accepted`, тело брони и `Location`.
 3. Сразу выполнить `GET /bookings/{bookingId}` — статус `Pending`, `processedAt` пустой.
 4. Подождать 2–3 секунды и повторить запрос — статус `Confirmed`, `processedAt` заполнен.
 5. Если удалить событие до обработки брони, она перейдёт в `Rejected` с заполненным `processedAt`.
+6. Если мест не осталось, очередной `POST /events/{id}/book` вернёт `409 Conflict`.
 
 ## Формат ошибок
 
-Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, а ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`.
+Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`, а `415`, который формирует MVC, приводится к тому же формату фильтром `ProblemDetailsContentTypeFilter`.
 
 | Код | Когда | Пример `title` |
 |---|---|---|
 | `400 Bad Request` | невалидная модель, query-параметры или фильтр `from > to` | `One or more validation errors occurred.` / `Validation failed` |
 | `404 Not Found` | событие или бронь с указанным id не найдены, либо маршрут не совпал | `Resource not found` / `Not Found` |
 | `405 Method Not Allowed` | неподдерживаемый HTTP-метод | `Method Not Allowed` |
+| `409 Conflict` | на событии не осталось свободных мест | `Conflict` |
 | `413 Payload Too Large` | тело запроса превышает лимит Kestrel | `Payload too large` |
+| `415 Unsupported Media Type` | неподдерживаемый `Content-Type` тела запроса | `Unsupported Media Type` |
 | `500 Internal Server Error` | непредвиденная ошибка | `Internal server error` |
 
 Пример ошибки `404`:
@@ -247,15 +316,15 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 }
 ```
 
-При `500` подробности исключения наружу не отдаются — в ответе только общее сообщение, а полное исключение пишется в лог с уровнем `Error`. Ошибки `400`/`404` логируются как предупреждения.
+При `500` подробности исключения наружу не отдаются — в ответе только общее сообщение, а полное исключение пишется в лог с уровнем `Error`. Ошибки `400`/`404`/`409` логируются как предупреждения.
 
 ## DTO
 
 API принимает и возвращает DTO, а не доменную модель напрямую:
 
-- **`CreateEventRequest`** — тело `POST /events`. Поля: `title`, `description`, `startAt`, `endAt`. Поле `id` не принимается — генерируется на сервере.
-- **`UpdateEventRequest`** — тело `PUT /events/{id}`. Те же поля, что у `CreateEventRequest`.
-- **`EventResponse`** — ответ `GET /events/{id}` и `POST /events`.
+- **`CreateEventRequest`** — тело `POST /events`. Поля: `title`, `description`, `startAt`, `endAt`, `totalSeats`. Поле `id` не принимается — генерируется на сервере.
+- **`UpdateEventRequest`** — тело `PUT /events/{id}`. Поля: `title`, `description`, `startAt`, `endAt`. Ёмкость события (`totalSeats`/`availableSeats`) через `PUT` не меняется.
+- **`EventResponse`** — ответ `GET /events/{id}` и `POST /events`. Поля: `id`, `title`, `description`, `startAt`, `endAt`, `totalSeats`, `availableSeats`.
 - **`PaginatedResult<T>`** — обёртка для `GET /events`.
 - **`GetEventsQuery`** — query-параметры `GET /events` (`title`, `from`, `to`, `page`, `pageSize`).
 - **`BookingInfo`** — ответ `POST /events/{id}/book` и `GET /bookings/{id}`. Поля: `id`, `eventId`, `status`, `createdAt`, `processedAt`.
@@ -265,6 +334,7 @@ API принимает и возвращает DTO, а не доменную м�
 - `Title` — обязательное поле;
 - `StartAt` — обязательное поле;
 - `EndAt` — обязательное поле, должно быть **позже** `StartAt`;
+- `TotalSeats` — обязательное поле при создании, целое число больше 0;
 - `page` ≥ 1, `1 ≤ pageSize ≤ 100`;
 - если заданы оба фильтра `from` и `to`, то `from ≤ to`.
 
@@ -281,13 +351,28 @@ curl -X POST http://localhost:5027/events \
     "title": "Meeting",
     "description": "Sprint planning",
     "startAt": "2025-01-10T10:00:00",
-    "endAt": "2025-01-10T11:00:00"
+    "endAt": "2025-01-10T11:00:00",
+    "totalSeats": 10
   }'
 ```
 
 ## Хранилище
 
 In-memory хранилища на `ConcurrentDictionary`: отдельно события (`EventService`) и бронирования (`InMemoryBookingStore`). Данные сохраняются только на время работы процесса и очищаются при перезапуске. Наружу сервисы и хранилище отдают копии объектов, поэтому изменение полученного DTO не влияет на сохранённые данные.
+
+## Соответствие заданию четвёртого спринта
+
+| Требование | Реализация в проекте |
+|---|---|
+| Ограничение мест события | `Event.TotalSeats`, `Event.AvailableSeats`, `TryReserveSeats`, `ReleaseSeats` |
+| `AvailableSeats == TotalSeats` при создании | `EventService.Create` |
+| Защита от овербукинга | `lock (_bookingLock)` в `BookingService.CreateBookingAsync` |
+| `409 Conflict` при отсутствии мест | `NoAvailableSeatsException` и маппинг в `ExceptionHandlingMiddleware` |
+| Параллельная фоновая обработка | `BookingProcessor` (`Task.WhenAll`) + `SemaphoreSlim`, запускается из `BookingProcessingService` |
+| Потокобезопасное обновление хранилищ | `ConcurrentDictionary` + `TryUpdate`-циклы в `EventService`, `SemaphoreSlim` в `BookingProcessor` |
+| Тесты на конкурентность | `BookingServiceTests`, `EventServiceSeatTests`, `BookingProcessorTests` |
+
+В задании фоновый сервис назван `BookingBackgroundService`, а хранилище событий — `InMemoryEventStore`. В проекте эти роли выполняют `BookingProcessingService` + `BookingProcessor` и `EventService` соответственно.
 
 ## Тесты
 
@@ -298,17 +383,21 @@ In-memory хранилища на `ConcurrentDictionary`: отдельно со�
 - валидация DTO: обязательность дат, `EndAt <= StartAt`, валидный запрос;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
 - пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
-- middleware: `400`/`404`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
+- middleware: `400`/`404`/`409`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
+- фильтр `ProblemDetailsContentTypeFilter`: `415` от MVC отдаётся с `application/problem+json`, обычные `ObjectResult` не меняются;
+- сущность `Event`: резерв одного и нескольких мест, нехватка мест, возврат мест, ограничение сверху `TotalSeats`, ненулевое количество, копирование мест в `Clone()`;
+- `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, атомарные резерв и возврат в хранилище, конкурентные запросы не превышают ёмкость;
 - сущность `Booking`: создание в статусе `Pending`, `Confirm`/`Reject`, заполнение `ProcessedAt`, запрет повторной обработки, проверка обязательных дат;
 - хранилище броней: добавление и чтение, изоляция копий, выборка только `Pending`, атомарная смена статуса;
 - `EventService.Exists`: существующее, удалённое и неизвестное событие;
-- `BookingService`: создание брони для существующего события, уникальные `Id` у нескольких броней, чтение по `Id`, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
-- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, обработка нескольких броней, пропуск уже обработанных броней, отказ брони удалённого события, продолжение обработки после ошибки хранилища, отмена по `CancellationToken` (в том числе посреди пачки);
+- `BookingService`: создание брони для существующего события, уменьшение `AvailableSeats`, бронирование до лимита мест, `NoAvailableSeatsException` после исчерпания, уникальные `Id`, чтение по `Id` без расхода места, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
+- конкурентность `BookingService`: 5 мест и 20 параллельных запросов (`Task.Run` + `Task.WhenAll`) дают ровно 5 успешных броней и 15 отказов, `AvailableSeats = 0`; 10 мест и 10 параллельных запросов дают 10 уникальных `Id`;
+- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, параллельный запуск задержек пачки (детерминированный счётчик одновременных задержек через `TimeProvider`, без измерения wall-clock), пропуск уже обработанных броней, отказ брони удалённого события, отказ и возврат места при ошибке подтверждения, сохранение места при успешном подтверждении, отмена по `CancellationToken` (в том числе посреди пачки);
 - `BookingProcessingService`: запуск опроса, обработка брони и корректная остановка по `CancellationToken`.
 
-Всего 89 тестов.
+Всего 124 теста.
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`.
+Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик. Тесты на конкурентность бронирования используют реальный параллелизм (`Task.Run` + `Task.WhenAll`), а не последовательные вызовы.
 
 ```bash
 dotnet test
@@ -344,7 +433,10 @@ middle-csharp/
 │       │   ├── BookingNotFoundException.cs
 │       │   ├── EventNotFoundException.cs
 │       │   ├── EventValidationException.cs
+│       │   ├── NoAvailableSeatsException.cs
 │       │   └── NotFoundException.cs
+│       ├── Filters/
+│       │   └── ProblemDetailsContentTypeFilter.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
 │       ├── Models/
@@ -369,15 +461,20 @@ middle-csharp/
 │       │   └── InMemoryBookingStoreTests.cs
 │       ├── DTOs/
 │       │   └── EventRequestValidationTests.cs
+│       ├── Filters/
+│       │   └── ProblemDetailsContentTypeFilterTests.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddlewareTests.cs
 │       ├── Models/
-│       │   └── BookingTests.cs
+│       │   ├── BookingTests.cs
+│       │   └── EventTests.cs
 │       ├── Services/
 │       │   ├── BookingServiceTests.cs
 │       │   ├── EventServiceCrudTests.cs
 │       │   ├── EventServiceFailureTests.cs
-│       │   └── EventServiceQueryTests.cs
+│       │   ├── EventServiceQueryTests.cs
+│       │   └── EventServiceSeatTests.cs
+│       ├── DelayTrackingTimeProvider.cs
 │       ├── FixedTimeProvider.cs
 │       ├── TestData.cs
 │       └── MiddleCsharp.Tests.csproj

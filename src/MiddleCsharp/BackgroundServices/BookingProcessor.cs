@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.Exceptions;
 using MiddleCsharp.Models;
 using MiddleCsharp.Services;
 
@@ -12,6 +13,7 @@ public sealed class BookingProcessor
     private readonly ILogger<BookingProcessor> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly BookingProcessingOptions _options;
+    private readonly SemaphoreSlim _processingSemaphore = new(1, 1);
 
     public BookingProcessor(
         IBookingStore bookingStore,
@@ -30,57 +32,159 @@ public sealed class BookingProcessor
     public async Task<int> ProcessPendingAsync(CancellationToken cancellationToken)
     {
         var pending = _bookingStore.GetPending();
-        var processed = 0;
 
-        foreach (var booking in pending)
+        if (pending.Count == 0)
         {
-            await Task.Delay(_options.ProcessingDelay, cancellationToken);
+            return 0;
+        }
+
+        var bookingIds = string.Join(", ", pending.Select(booking => booking.Id));
+
+        _logger.LogInformation(
+            "Processing {Count} pending {BookingLabel} in parallel: {BookingIds}",
+            pending.Count,
+            pending.Count == 1 ? "booking" : "bookings",
+            bookingIds);
+
+        var tasks = pending.Select(booking => ProcessBookingAsync(booking, cancellationToken));
+        var results = await Task.WhenAll(tasks);
+
+        return results.Count(processed => processed);
+    }
+
+    private async Task<bool> ProcessBookingAsync(Booking booking, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(_options.ProcessingDelay, _timeProvider, stoppingToken);
+
+            await _processingSemaphore.WaitAsync(stoppingToken);
 
             try
             {
-                var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
-                var targetStatus = _eventService.Exists(booking.EventId)
-                    ? BookingStatus.Confirmed
-                    : BookingStatus.Rejected;
+                if (!_eventService.Exists(booking.EventId))
+                {
+                    return RejectMissingEvent(booking);
+                }
 
-                if (_bookingStore.TryUpdateStatus(
+                var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+                if (!_bookingStore.TryUpdateStatus(
                     booking.Id,
                     BookingStatus.Pending,
-                    targetStatus,
+                    BookingStatus.Confirmed,
                     processedAt))
-                {
-                    processed++;
-
-                    if (targetStatus == BookingStatus.Confirmed)
-                    {
-                        _logger.LogInformation(
-                            "Booking {BookingId} for event {EventId} confirmed at {ProcessedAt}",
-                            booking.Id,
-                            booking.EventId,
-                            processedAt);
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "Booking {BookingId} rejected at {ProcessedAt}: event {EventId} no longer exists",
-                            booking.Id,
-                            processedAt,
-                            booking.EventId);
-                    }
-                }
-                else
                 {
                     _logger.LogWarning(
                         "Booking {BookingId} was skipped because it is no longer pending",
                         booking.Id);
+
+                    return false;
                 }
+
+                _logger.LogInformation(
+                    "Booking {BookingId} for event {EventId} confirmed at {ProcessedAt}",
+                    booking.Id,
+                    booking.EventId,
+                    processedAt);
+
+                return true;
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            finally
             {
-                _logger.LogError(exception, "Failed to process booking {BookingId}", booking.Id);
+                _processingSemaphore.Release();
             }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return await RejectAfterFailureAsync(booking, exception);
+        }
+    }
 
-        return processed;
+    private bool RejectMissingEvent(Booking booking)
+    {
+        var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+        if (!_bookingStore.TryUpdateStatus(
+            booking.Id,
+            BookingStatus.Pending,
+            BookingStatus.Rejected,
+            processedAt))
+        {
+            _logger.LogWarning(
+                "Booking {BookingId} was skipped because it is no longer pending",
+                booking.Id);
+
+            return false;
+        }
+
+        _logger.LogWarning(
+            "Booking {BookingId} rejected at {ProcessedAt}: event {EventId} no longer exists",
+            booking.Id,
+            processedAt,
+            booking.EventId);
+
+        return true;
+    }
+
+    private async Task<bool> RejectAfterFailureAsync(Booking booking, Exception exception)
+    {
+        _logger.LogError(exception, "Failed to process booking {BookingId}", booking.Id);
+
+        await _processingSemaphore.WaitAsync();
+
+        try
+        {
+            var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+            if (!_bookingStore.TryUpdateStatus(
+                booking.Id,
+                BookingStatus.Pending,
+                BookingStatus.Rejected,
+                processedAt))
+            {
+                return false;
+            }
+
+            ReleaseSeat(booking.EventId);
+
+            _logger.LogWarning(
+                "Booking {BookingId} rejected at {ProcessedAt} after processing error",
+                booking.Id,
+                processedAt);
+
+            return true;
+        }
+        catch (Exception rejectException)
+        {
+            _logger.LogError(
+                rejectException,
+                "Failed to reject booking {BookingId} after processing error",
+                booking.Id);
+
+            return false;
+        }
+        finally
+        {
+            _processingSemaphore.Release();
+        }
+    }
+
+    private void ReleaseSeat(Guid eventId)
+    {
+        try
+        {
+            _eventService.ReleaseSeats(eventId);
+        }
+        catch (EventNotFoundException)
+        {
+            _logger.LogWarning(
+                "Cannot release a seat for event {EventId} because it no longer exists",
+                eventId);
+        }
     }
 }

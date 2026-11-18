@@ -28,7 +28,8 @@ Content-Type: application/json
   "title": "Meeting",
   "description": "Sprint planning",
   "startAt": "2025-01-10T10:00:00",
-  "endAt": "2025-01-10T11:00:00"
+  "endAt": "2025-01-10T11:00:00",
+  "totalSeats": 3
 }
 
 ### Событие по id (подставь id из ответа POST)
@@ -55,6 +56,14 @@ DELETE {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000
 
 ### Создать бронь на событие: 202 Accepted и Location
 # Подставь id события из ответа POST /events
+POST {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000/book
+
+### Проверить свободные места: availableSeats уменьшается после каждой брони
+GET {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Бронь сверх лимита мест: 409 Conflict в формате Problem Details
+# Повтори запрос больше totalSeats раз
 POST {{middle_csharp_HostAddress}}/events/00000000-0000-0000-0000-000000000000/book
 
 ### Статус брони: сначала Pending, после обработки Confirmed
