@@ -21,8 +21,8 @@ public sealed class BookingProcessingService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "Booking processing started: poll {PollInterval}, processing delay {ProcessingDelay}",
-            _options.PollInterval,
+            "Booking processing started: poll {PollingInterval}, processing delay {ProcessingDelay}",
+            _options.PollingInterval,
             _options.ProcessingDelay);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -42,7 +42,7 @@ public sealed class BookingProcessingService : BackgroundService
 
             try
             {
-                await Task.Delay(_options.PollInterval, stoppingToken);
+                await Task.Delay(_options.PollingInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

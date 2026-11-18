@@ -64,7 +64,7 @@ public class BookingProcessingServiceTests
     {
         var options = Options.Create(new BookingProcessingOptions
         {
-            PollInterval = TimeSpan.FromMilliseconds(20),
+            PollingInterval = TimeSpan.FromMilliseconds(20),
             ProcessingDelay = TimeSpan.Zero
         });
 

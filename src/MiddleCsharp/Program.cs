@@ -54,8 +54,8 @@ builder.Services
     .AddOptions<BookingProcessingOptions>()
     .Bind(builder.Configuration.GetSection(BookingProcessingOptions.SectionName))
     .Validate(
-        options => options.PollInterval > TimeSpan.Zero,
-        "BookingProcessing:PollInterval must be greater than zero.")
+        options => options.PollingInterval > TimeSpan.Zero,
+        "BookingProcessing:PollingInterval must be greater than zero.")
     .Validate(
         options => options.ProcessingDelay >= TimeSpan.Zero,
         "BookingProcessing:ProcessingDelay must be zero or greater.")
