@@ -127,9 +127,10 @@ public class EventServiceFailureTests
         var invalid = TestData.NewEvent("");
 
         // Act
-        Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        var create = () => _service.Create(invalid);
 
         // Assert
+        Assert.Throws<EventValidationException>(create);
         Assert.Equal(0, _service.GetAll(TestData.NoFilter, 1, 10).TotalCount);
     }
 }

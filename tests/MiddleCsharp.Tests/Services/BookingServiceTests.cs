@@ -177,14 +177,17 @@ public class BookingServiceTests
 
         // Act
         var bookings = new List<BookingInfo>();
+        var availableSeatsAfterEachBooking = new List<int>();
 
         for (var i = 0; i < 3; i++)
         {
             bookings.Add(await service.CreateBookingAsync(createdEvent.Id));
-            Assert.Equal(2 - i, _eventService.GetById(createdEvent.Id).AvailableSeats);
+            availableSeatsAfterEachBooking.Add(
+                _eventService.GetById(createdEvent.Id).AvailableSeats);
         }
 
         // Assert
+        Assert.Equal(new[] { 2, 1, 0 }, availableSeatsAfterEachBooking);
         Assert.Equal(3, bookings.Select(booking => booking.Id).Distinct().Count());
         Assert.Equal(0, _eventService.GetById(createdEvent.Id).AvailableSeats);
         Assert.Equal(3, _bookingStore.GetPending().Count);
