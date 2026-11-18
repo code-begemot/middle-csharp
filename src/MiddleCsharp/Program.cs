@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.Filters;
 using MiddleCsharp.Middleware;
 using MiddleCsharp.Services;
 
@@ -14,6 +15,8 @@ var problemJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
 };
 
 builder.Services.AddControllers();
+builder.Services.Configure<MvcOptions>(
+    options => options.Filters.Add<ProblemDetailsContentTypeFilter>());
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddProblemDetails(options =>

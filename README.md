@@ -201,7 +201,7 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 `BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. Сервис:
 
-- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollInterval`, по умолчанию 1 секунда);
+- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollingInterval`, по умолчанию 1 секунда);
 - передаёт всю пачку `Pending`-броней в `BookingProcessor`;
 - обрабатывает брони **параллельно**: для каждой запускается отдельная задача, результаты собираются через `Task.WhenAll`;
 - для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе. Задержка выполняется до захвата семафора, поэтому пачка из N броней занимает примерно `ProcessingDelay`, а не N × `ProcessingDelay`;
@@ -215,12 +215,12 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 ```json
 "BookingProcessing": {
-  "PollInterval": "00:00:01",
+  "PollingInterval": "00:00:01",
   "ProcessingDelay": "00:00:02"
 }
 ```
 
-Некорректные значения (`PollInterval` ≤ 0 или `ProcessingDelay` < 0) останавливают запуск приложения с ошибкой валидации настроек.
+Некорректные значения (`PollingInterval` ≤ 0 или `ProcessingDelay` < 0) останавливают запуск приложения с ошибкой валидации настроек.
 
 ### Синхронизация и защита от овербукинга
 
@@ -264,7 +264,7 @@ curl -s "http://localhost:5027/events/$EVENT_ID"
 
 ## Формат ошибок
 
-Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, а ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`.
+Все ошибки отдаются в формате [Problem Details (RFC 7807)](https://www.rfc-editor.org/rfc/rfc9457) с `Content-Type: application/problem+json`. Исключения контроллеров и сервисов перехватывает глобальный middleware `ExceptionHandlingMiddleware`, ответы без тела (404 для неизвестного маршрута, 405 для неподдерживаемого метода, 413 для слишком большого тела) дополняются через `AddProblemDetails()` и `UseStatusCodePages()`, а `415`, который формирует MVC, приводится к тому же формату фильтром `ProblemDetailsContentTypeFilter`.
 
 | Код | Когда | Пример `title` |
 |---|---|---|
@@ -273,6 +273,7 @@ curl -s "http://localhost:5027/events/$EVENT_ID"
 | `405 Method Not Allowed` | неподдерживаемый HTTP-метод | `Method Not Allowed` |
 | `409 Conflict` | на событии не осталось свободных мест | `Conflict` |
 | `413 Payload Too Large` | тело запроса превышает лимит Kestrel | `Payload too large` |
+| `415 Unsupported Media Type` | неподдерживаемый `Content-Type` тела запроса | `Unsupported Media Type` |
 | `500 Internal Server Error` | непредвиденная ошибка | `Internal server error` |
 
 Пример ошибки `404`:
@@ -383,6 +384,7 @@ In-memory хранилища на `ConcurrentDictionary`: отдельно со�
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
 - пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
 - middleware: `400`/`404`/`409`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
+- фильтр `ProblemDetailsContentTypeFilter`: `415` от MVC отдаётся с `application/problem+json`, обычные `ObjectResult` не меняются;
 - сущность `Event`: резерв одного и нескольких мест, нехватка мест, возврат мест, ограничение сверху `TotalSeats`, ненулевое количество, копирование мест в `Clone()`;
 - `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, атомарные резерв и возврат в хранилище, конкурентные запросы не превышают ёмкость;
 - сущность `Booking`: создание в статусе `Pending`, `Confirm`/`Reject`, заполнение `ProcessedAt`, запрет повторной обработки, проверка обязательных дат;
@@ -390,12 +392,12 @@ In-memory хранилища на `ConcurrentDictionary`: отдельно со�
 - `EventService.Exists`: существующее, удалённое и неизвестное событие;
 - `BookingService`: создание брони для существующего события, уменьшение `AvailableSeats`, бронирование до лимита мест, `NoAvailableSeatsException` после исчерпания, уникальные `Id`, чтение по `Id` без расхода места, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
 - конкурентность `BookingService`: 5 мест и 20 параллельных запросов (`Task.Run` + `Task.WhenAll`) дают ровно 5 успешных броней и 15 отказов, `AvailableSeats = 0`; 10 мест и 10 параллельных запросов дают 10 уникальных `Id`;
-- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, параллельная обработка пачки, пропуск уже обработанных броней, отказ брони удалённого события, отказ и возврат места при ошибке подтверждения, сохранение места при успешном подтверждении, отмена по `CancellationToken` (в том числе посреди пачки);
+- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, параллельный запуск задержек пачки (детерминированный счётчик одновременных задержек через `TimeProvider`, без измерения wall-clock), пропуск уже обработанных броней, отказ брони удалённого события, отказ и возврат места при ошибке подтверждения, сохранение места при успешном подтверждении, отмена по `CancellationToken` (в том числе посреди пачки);
 - `BookingProcessingService`: запуск опроса, обработка брони и корректная остановка по `CancellationToken`.
 
-Всего 122 теста.
+Всего 124 теста.
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`. Тесты на конкурентность используют реальный параллелизм (`Task.Run` + `Task.WhenAll`), а не последовательные вызовы.
+Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик. Тесты на конкурентность бронирования используют реальный параллелизм (`Task.Run` + `Task.WhenAll`), а не последовательные вызовы.
 
 ```bash
 dotnet test
@@ -433,6 +435,8 @@ middle-csharp/
 │       │   ├── EventValidationException.cs
 │       │   ├── NoAvailableSeatsException.cs
 │       │   └── NotFoundException.cs
+│       ├── Filters/
+│       │   └── ProblemDetailsContentTypeFilter.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
 │       ├── Models/
@@ -457,6 +461,8 @@ middle-csharp/
 │       │   └── InMemoryBookingStoreTests.cs
 │       ├── DTOs/
 │       │   └── EventRequestValidationTests.cs
+│       ├── Filters/
+│       │   └── ProblemDetailsContentTypeFilterTests.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddlewareTests.cs
 │       ├── Models/
@@ -468,6 +474,7 @@ middle-csharp/
 │       │   ├── EventServiceFailureTests.cs
 │       │   ├── EventServiceQueryTests.cs
 │       │   └── EventServiceSeatTests.cs
+│       ├── DelayTrackingTimeProvider.cs
 │       ├── FixedTimeProvider.cs
 │       ├── TestData.cs
 │       └── MiddleCsharp.Tests.csproj

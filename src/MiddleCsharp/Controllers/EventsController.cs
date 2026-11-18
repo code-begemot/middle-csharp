@@ -5,7 +5,6 @@ using MiddleCsharp.Services;
 namespace MiddleCsharp.Controllers;
 
 [ApiController]
-[Produces("application/json")]
 [Route("events")]
 public class EventsController : ControllerBase
 {
@@ -19,9 +18,18 @@ public class EventsController : ControllerBase
     }
 
     [HttpGet]
-    [ProducesResponseType(typeof(PaginatedResult<EventResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(PaginatedResult<EventResponse>),
+        StatusCodes.Status200OK,
+        "application/json")]
+    [ProducesResponseType(
+        typeof(ValidationProblemDetails),
+        StatusCodes.Status400BadRequest,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public ActionResult<PaginatedResult<EventResponse>> GetAll([FromQuery] GetEventsQuery query)
     {
         var result = _eventService.GetAll(query.ToFilter(), query.Page, query.PageSize);
@@ -29,19 +37,44 @@ public class EventsController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    [ProducesResponseType(typeof(EventResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(EventResponse),
+        StatusCodes.Status200OK,
+        "application/json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status404NotFound,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public ActionResult<EventResponse> GetById(Guid id)
     {
         return Ok(_eventService.GetById(id).ToResponse());
     }
 
     [HttpPost]
-    [ProducesResponseType(typeof(EventResponse), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status413PayloadTooLarge)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(EventResponse),
+        StatusCodes.Status201Created,
+        "application/json")]
+    [ProducesResponseType(
+        typeof(ValidationProblemDetails),
+        StatusCodes.Status400BadRequest,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status413PayloadTooLarge,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status415UnsupportedMediaType,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public ActionResult<EventResponse> Create([FromBody] CreateEventRequest request)
     {
         var created = _eventService.Create(request.ToEntity());
@@ -50,10 +83,26 @@ public class EventsController : ControllerBase
 
     [HttpPut("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status413PayloadTooLarge)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(ValidationProblemDetails),
+        StatusCodes.Status400BadRequest,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status404NotFound,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status413PayloadTooLarge,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status415UnsupportedMediaType,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public IActionResult Update(Guid id, [FromBody] UpdateEventRequest request)
     {
         _eventService.Update(id, request.ToEntity());
@@ -61,10 +110,22 @@ public class EventsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/book")]
-    [ProducesResponseType(typeof(BookingInfo), StatusCodes.Status202Accepted)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(BookingInfo),
+        StatusCodes.Status202Accepted,
+        "application/json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status404NotFound,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status409Conflict,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public async Task<ActionResult<BookingInfo>> Book(Guid id)
     {
         var booking = await _bookingService.CreateBookingAsync(id);
@@ -78,8 +139,14 @@ public class EventsController : ControllerBase
 
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status404NotFound,
+        "application/problem+json")]
+    [ProducesResponseType(
+        typeof(ProblemDetails),
+        StatusCodes.Status500InternalServerError,
+        "application/problem+json")]
     public IActionResult Delete(Guid id)
     {
         _eventService.Delete(id);
