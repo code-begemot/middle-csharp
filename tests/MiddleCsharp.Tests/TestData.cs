@@ -16,13 +16,13 @@ internal static class TestData
         DateTime? endAt = null,
         Guid? id = null,
         int totalSeats = 10) => new()
-    {
-        Id = id ?? Guid.Empty,
-        Title = title,
-        Description = "Sprint planning",
-        StartAt = startAt ?? DefaultStartAt,
-        EndAt = endAt ?? DefaultEndAt,
-        TotalSeats = totalSeats,
-        AvailableSeats = totalSeats
-    };
+        {
+            Id = id ?? Guid.Empty,
+            Title = title,
+            Description = "Sprint planning",
+            StartAt = startAt ?? DefaultStartAt,
+            EndAt = endAt ?? DefaultEndAt,
+            TotalSeats = totalSeats,
+            AvailableSeats = totalSeats
+        };
 }
