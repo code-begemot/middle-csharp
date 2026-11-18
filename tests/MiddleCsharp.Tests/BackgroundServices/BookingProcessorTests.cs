@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MiddleCsharp.BackgroundServices;
@@ -72,7 +71,7 @@ public class BookingProcessorTests
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_MultiplePendingBookings_ProcessesThemInParallel()
+    public async Task ProcessPendingAsync_MultiplePendingBookings_StartsDelaysInParallel()
     {
         // Arrange
         var eventId = CreateEvent();
@@ -85,21 +84,26 @@ public class BookingProcessorTests
             _store.Add(booking);
         }
 
-        var processor = CreateProcessor(TimeSpan.FromMilliseconds(500));
+        var timeProvider = new DelayTrackingTimeProvider(bookings.Count);
+        var processor = CreateProcessor(TimeSpan.FromSeconds(30), timeProvider: timeProvider);
+        using var cancellationTokenSource = new CancellationTokenSource();
 
         // Act
-        var stopwatch = Stopwatch.StartNew();
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
-        stopwatch.Stop();
+        var processing = processor.ProcessPendingAsync(cancellationTokenSource.Token);
+
+        try
+        {
+            await timeProvider.ExpectedDelaysStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            cancellationTokenSource.Cancel();
+        }
 
         // Assert
-        Assert.Equal(4, processed);
-        Assert.All(
-            bookings,
-            booking => Assert.Equal(BookingStatus.Confirmed, _store.GetById(booking.Id)!.Status));
-        Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromMilliseconds(1600),
-            $"Processing took {stopwatch.ElapsedMilliseconds} ms, expected parallel execution.");
+        Assert.Equal(bookings.Count, timeProvider.MaxActiveDelays);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
+        Assert.Equal(bookings.Count, _store.GetPending().Count);
     }
 
     [Fact]
@@ -225,7 +229,10 @@ public class BookingProcessorTests
     private Guid CreateEvent(int totalSeats = 10) =>
         _eventService.Create(TestData.NewEvent(totalSeats: totalSeats)).Id;
 
-    private BookingProcessor CreateProcessor(TimeSpan processingDelay, IBookingStore? store = null)
+    private BookingProcessor CreateProcessor(
+        TimeSpan processingDelay,
+        IBookingStore? store = null,
+        TimeProvider? timeProvider = null)
     {
         var options = Options.Create(new BookingProcessingOptions
         {
@@ -236,7 +243,7 @@ public class BookingProcessorTests
             store ?? _store,
             _eventService,
             options,
-            _timeProvider,
+            timeProvider ?? _timeProvider,
             NullLogger<BookingProcessor>.Instance);
     }
 

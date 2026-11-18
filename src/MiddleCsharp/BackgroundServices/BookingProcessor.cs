@@ -56,7 +56,7 @@ public sealed class BookingProcessor
     {
         try
         {
-            await Task.Delay(_options.ProcessingDelay, stoppingToken);
+            await Task.Delay(_options.ProcessingDelay, _timeProvider, stoppingToken);
 
             await _processingSemaphore.WaitAsync(stoppingToken);
 
