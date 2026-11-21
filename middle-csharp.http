@@ -1,5 +1,8 @@
 @middle_csharp_HostAddress = http://localhost:5027
 
+# Перед запуском поднимите PostgreSQL: docker compose up -d
+# Данные сохраняются в volume и переживают перезапуск приложения.
+
 ### Список событий: первая страница, 10 элементов по умолчанию
 GET {{middle_csharp_HostAddress}}/events
 Accept: application/json
