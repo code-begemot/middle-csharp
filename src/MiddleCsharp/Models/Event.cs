@@ -2,13 +2,46 @@ namespace MiddleCsharp.Models;
 
 public class Event
 {
-    public Guid Id { get; set; }
-    public string Title { get; set; } = string.Empty;
-    public string? Description { get; set; }
-    public DateTime StartAt { get; set; }
-    public DateTime EndAt { get; set; }
-    public int TotalSeats { get; set; }
-    public int AvailableSeats { get; set; }
+    public Guid Id { get; private set; }
+    public string Title { get; private set; } = null!;
+    public string? Description { get; private set; }
+    public DateTime StartAt { get; private set; }
+    public DateTime EndAt { get; private set; }
+    public int TotalSeats { get; private set; }
+    public int AvailableSeats { get; private set; }
+    public ICollection<Booking> Bookings { get; private set; } = new List<Booking>();
+
+    private Event()
+    {
+    }
+
+    public Event(
+        string title,
+        string? description,
+        DateTime startAt,
+        DateTime endAt,
+        int totalSeats)
+    {
+        Id = Guid.NewGuid();
+        Title = title;
+        Description = description;
+        StartAt = NormalizeToUnspecified(startAt);
+        EndAt = NormalizeToUnspecified(endAt);
+        TotalSeats = totalSeats;
+        AvailableSeats = totalSeats;
+    }
+
+    public void UpdateDetails(
+        string title,
+        string? description,
+        DateTime startAt,
+        DateTime endAt)
+    {
+        Title = title;
+        Description = description;
+        StartAt = NormalizeToUnspecified(startAt);
+        EndAt = NormalizeToUnspecified(endAt);
+    }
 
     public bool TryReserveSeats(int count = 1)
     {
@@ -36,14 +69,6 @@ public class Event
         AvailableSeats = (int)Math.Min(TotalSeats, (long)AvailableSeats + count);
     }
 
-    public Event Clone() => new()
-    {
-        Id = Id,
-        Title = Title,
-        Description = Description,
-        StartAt = StartAt,
-        EndAt = EndAt,
-        TotalSeats = TotalSeats,
-        AvailableSeats = AvailableSeats
-    };
+    internal static DateTime NormalizeToUnspecified(DateTime value) =>
+        DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
 }

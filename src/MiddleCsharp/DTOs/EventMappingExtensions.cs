@@ -4,22 +4,19 @@ namespace MiddleCsharp.DTOs;
 
 public static class EventMappingExtensions
 {
-    public static Event ToEntity(this CreateEventRequest request) => new()
-    {
-        Title = request.Title,
-        Description = request.Description,
-        StartAt = request.StartAt ?? default,
-        EndAt = request.EndAt ?? default,
-        TotalSeats = request.TotalSeats ?? default
-    };
+    public static Event ToEntity(this CreateEventRequest request) => new(
+        request.Title,
+        request.Description,
+        request.StartAt ?? default,
+        request.EndAt ?? default,
+        request.TotalSeats ?? default);
 
-    public static Event ToEntity(this UpdateEventRequest request) => new()
-    {
-        Title = request.Title,
-        Description = request.Description,
-        StartAt = request.StartAt ?? default,
-        EndAt = request.EndAt ?? default
-    };
+    public static Event ToEntity(this UpdateEventRequest request) => new(
+        request.Title,
+        request.Description,
+        request.StartAt ?? default,
+        request.EndAt ?? default,
+        totalSeats: 0);
 
     public static EventResponse ToResponse(this Event evt) => new()
     {

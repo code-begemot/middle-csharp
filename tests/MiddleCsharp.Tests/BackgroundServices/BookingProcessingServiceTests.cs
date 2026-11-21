@@ -1,7 +1,10 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DTOs;
 using MiddleCsharp.Models;
 using MiddleCsharp.Services;
 
@@ -9,26 +12,120 @@ namespace MiddleCsharp.Tests.BackgroundServices;
 
 public class BookingProcessingServiceTests
 {
-    private static readonly DateTime CreatedAt = new(2025, 1, 10, 10, 0, 0, DateTimeKind.Utc);
     private static readonly DateTimeOffset Now =
         new(2025, 1, 10, 10, 0, 5, TimeSpan.Zero);
+
+    [Fact]
+    public async Task ProcessPendingAsync_PendingBooking_ConfirmsIt()
+    {
+        // Arrange
+        using var app = new TestApplication(new FixedTimeProvider(Now));
+        var eventId = await CreateEventAsync(app);
+        var booking = await CreateBookingAsync(app, eventId);
+        var service = CreateService(app, new FixedTimeProvider(Now), TimeSpan.Zero, TimeSpan.Zero);
+
+        // Act
+        var processed = await service.ProcessPendingAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(1, processed);
+        Assert.Equal(BookingStatus.Confirmed, await GetStatusAsync(app, booking.Id));
+    }
+
+    [Fact]
+    public async Task ProcessPendingAsync_NoPendingBookings_ReturnsZero()
+    {
+        // Arrange
+        using var app = new TestApplication(new FixedTimeProvider(Now));
+        var service = CreateService(app, new FixedTimeProvider(Now), TimeSpan.Zero, TimeSpan.Zero);
+
+        // Act
+        var processed = await service.ProcessPendingAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(0, processed);
+    }
+
+    [Fact]
+    public async Task ProcessPendingAsync_MultiplePendingBookings_ConfirmsAll()
+    {
+        // Arrange
+        using var app = new TestApplication(new FixedTimeProvider(Now));
+        var eventId = await CreateEventAsync(app);
+        var first = await CreateBookingAsync(app, eventId);
+        var second = await CreateBookingAsync(app, eventId);
+        var service = CreateService(app, new FixedTimeProvider(Now), TimeSpan.Zero, TimeSpan.Zero);
+
+        // Act
+        var processed = await service.ProcessPendingAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(2, processed);
+        Assert.Equal(BookingStatus.Confirmed, await GetStatusAsync(app, first.Id));
+        Assert.Equal(BookingStatus.Confirmed, await GetStatusAsync(app, second.Id));
+    }
+
+    [Fact]
+    public async Task ProcessPendingAsync_MultiplePendingBookings_StartsDelaysInParallel()
+    {
+        // Arrange
+        using var app = new TestApplication(new FixedTimeProvider(Now));
+        var eventId = await CreateEventAsync(app);
+        var bookings = new List<BookingInfo>();
+
+        for (var i = 0; i < 4; i++)
+        {
+            bookings.Add(await CreateBookingAsync(app, eventId));
+        }
+
+        var timeProvider = new DelayTrackingTimeProvider(bookings.Count);
+        var service = CreateService(
+            app,
+            timeProvider,
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(30));
+        using var cancellationTokenSource = new CancellationTokenSource();
+
+        // Act
+        var processing = service.ProcessPendingAsync(cancellationTokenSource.Token);
+
+        try
+        {
+            await timeProvider.ExpectedDelaysStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            cancellationTokenSource.Cancel();
+        }
+
+        // Assert
+        Assert.Equal(bookings.Count, timeProvider.MaxActiveDelays);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
+
+        foreach (var booking in bookings)
+        {
+            Assert.Equal(BookingStatus.Pending, await GetStatusAsync(app, booking.Id));
+        }
+    }
 
     [Fact]
     public async Task ExecuteAsync_PendingBooking_ProcessesItAndStopsByCancellation()
     {
         // Arrange
-        var eventService = new EventService();
-        var eventId = eventService.Create(TestData.NewEvent()).Id;
-        var store = new InMemoryBookingStore();
-        var booking = Booking.CreatePending(eventId, CreatedAt);
-        store.Add(booking);
-        var service = CreateService(store, eventService);
+        using var app = new TestApplication();
+        var eventId = await CreateEventAsync(app);
+        var booking = await CreateBookingAsync(app, eventId);
+        var service = CreateService(
+            app,
+            TimeProvider.System,
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.Zero);
 
         // Act
         await service.StartAsync(CancellationToken.None);
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (store.GetById(booking.Id)!.Status == BookingStatus.Pending &&
+        while (await GetStatusAsync(app, booking.Id) == BookingStatus.Pending &&
                DateTime.UtcNow < deadline)
         {
             await Task.Delay(10);
@@ -37,7 +134,7 @@ public class BookingProcessingServiceTests
         await service.StopAsync(CancellationToken.None);
 
         // Assert
-        Assert.Equal(BookingStatus.Confirmed, store.GetById(booking.Id)!.Status);
+        Assert.Equal(BookingStatus.Confirmed, await GetStatusAsync(app, booking.Id));
         Assert.NotNull(service.ExecuteTask);
         Assert.True(service.ExecuteTask.IsCompletedSuccessfully);
     }
@@ -46,7 +143,12 @@ public class BookingProcessingServiceTests
     public async Task ExecuteAsync_NoPendingBookings_StopsWithoutErrors()
     {
         // Arrange
-        var service = CreateService(new InMemoryBookingStore(), new EventService());
+        using var app = new TestApplication();
+        var service = CreateService(
+            app,
+            TimeProvider.System,
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.Zero);
 
         // Act
         await service.StartAsync(CancellationToken.None);
@@ -59,25 +161,48 @@ public class BookingProcessingServiceTests
     }
 
     private static BookingProcessingService CreateService(
-        IBookingStore store,
-        IEventService eventService)
+        TestApplication app,
+        TimeProvider timeProvider,
+        TimeSpan pollingInterval,
+        TimeSpan processingDelay)
     {
         var options = Options.Create(new BookingProcessingOptions
         {
-            PollingInterval = TimeSpan.FromMilliseconds(20),
-            ProcessingDelay = TimeSpan.Zero
+            PollingInterval = pollingInterval,
+            ProcessingDelay = processingDelay
         });
 
-        var processor = new BookingProcessor(
-            store,
-            eventService,
-            options,
-            new FixedTimeProvider(Now),
-            NullLogger<BookingProcessor>.Instance);
-
         return new BookingProcessingService(
-            processor,
+            app.ScopeFactory,
             options,
+            timeProvider,
             NullLogger<BookingProcessingService>.Instance);
+    }
+
+    private static async Task<Guid> CreateEventAsync(TestApplication app)
+    {
+        using var scope = app.CreateScope();
+        var eventService = scope.ServiceProvider.GetRequiredService<IEventService>();
+
+        return (await eventService.CreateAsync(TestData.NewEvent(totalSeats: 10))).Id;
+    }
+
+    private static async Task<BookingInfo> CreateBookingAsync(TestApplication app, Guid eventId)
+    {
+        using var scope = app.CreateScope();
+        var bookingService = scope.ServiceProvider.GetRequiredService<IBookingService>();
+
+        return await bookingService.CreateBookingAsync(eventId);
+    }
+
+    private static async Task<BookingStatus> GetStatusAsync(TestApplication app, Guid bookingId)
+    {
+        using var scope = app.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        return (await context.Bookings
+            .AsNoTracking()
+            .SingleAsync(booking => booking.Id == bookingId))
+            .Status;
     }
 }

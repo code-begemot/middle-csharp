@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using MiddleCsharp.DTOs;
+using MiddleCsharp.Models;
 
 namespace MiddleCsharp.Tests.DTOs;
 
@@ -78,6 +79,49 @@ public class EventRequestValidationTests
 
         // Assert
         Assert.Contains(results, result => result.ErrorMessage == "TotalSeats must be greater than 0.");
+    }
+
+    [Fact]
+    public void CreateEventRequest_TitleTooLong_IsInvalid()
+    {
+        // Arrange
+        var request = new CreateEventRequest
+        {
+            Title = new string('t', EventConstraints.TitleMaxLength + 1),
+            StartAt = new DateTime(2025, 1, 10, 10, 0, 0),
+            EndAt = new DateTime(2025, 1, 10, 11, 0, 0),
+            TotalSeats = 10
+        };
+
+        // Act
+        var results = Validate(request);
+
+        // Assert
+        Assert.Contains(
+            results,
+            result => result.ErrorMessage == "Title must be at most 200 characters long.");
+    }
+
+    [Fact]
+    public void CreateEventRequest_DescriptionTooLong_IsInvalid()
+    {
+        // Arrange
+        var request = new CreateEventRequest
+        {
+            Title = "Meeting",
+            Description = new string('d', EventConstraints.DescriptionMaxLength + 1),
+            StartAt = new DateTime(2025, 1, 10, 10, 0, 0),
+            EndAt = new DateTime(2025, 1, 10, 11, 0, 0),
+            TotalSeats = 10
+        };
+
+        // Act
+        var results = Validate(request);
+
+        // Assert
+        Assert.Contains(
+            results,
+            result => result.ErrorMessage == "Description must be at most 2000 characters long.");
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.DataAccess;
 using MiddleCsharp.DTOs;
 using MiddleCsharp.Exceptions;
@@ -5,55 +6,62 @@ using MiddleCsharp.Models;
 
 namespace MiddleCsharp.Services;
 
-public sealed class BookingService : IBookingService
+internal sealed class BookingService : IBookingService
 {
-    private readonly object _bookingLock = new();
-    private readonly IEventService _eventService;
-    private readonly IBookingStore _bookingStore;
+    private readonly AppDbContext _context;
     private readonly TimeProvider _timeProvider;
 
-    public BookingService(
-        IEventService eventService,
-        IBookingStore bookingStore,
-        TimeProvider timeProvider)
+    public BookingService(AppDbContext context, TimeProvider timeProvider)
     {
-        _eventService = eventService;
-        _bookingStore = bookingStore;
+        _context = context;
         _timeProvider = timeProvider;
     }
 
-    public Task<BookingInfo> CreateBookingAsync(Guid eventId)
+    public async Task<BookingInfo> CreateBookingAsync(
+        Guid eventId,
+        CancellationToken cancellationToken = default)
     {
+        await SeatReservationLock.Instance.WaitAsync(cancellationToken);
+
         Booking booking;
 
-        lock (_bookingLock)
+        try
         {
-            if (!_eventService.TryReserveSeats(eventId))
+            var evt = await _context.Events
+                .SingleOrDefaultAsync(stored => stored.Id == eventId, cancellationToken)
+                ?? throw new EventNotFoundException(eventId);
+
+            if (!evt.TryReserveSeats())
             {
                 throw new NoAvailableSeatsException();
             }
 
             booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
 
-            try
-            {
-                _bookingStore.Add(booking);
-            }
-            catch
-            {
-                _eventService.ReleaseSeats(eventId);
-                throw;
-            }
+            _context.Bookings.Add(booking);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            _context.ChangeTracker.Clear();
+            throw;
+        }
+        finally
+        {
+            SeatReservationLock.Instance.Release();
         }
 
-        return Task.FromResult(booking.ToInfo());
+        return booking.ToInfo();
     }
 
-    public Task<BookingInfo> GetBookingByIdAsync(Guid bookingId)
+    public async Task<BookingInfo> GetBookingByIdAsync(
+        Guid bookingId,
+        CancellationToken cancellationToken = default)
     {
-        var booking = _bookingStore.GetById(bookingId)
-            ?? throw new BookingNotFoundException(bookingId);
+        var booking = await _context.Bookings
+            .AsNoTracking()
+            .SingleOrDefaultAsync(stored => stored.Id == bookingId, cancellationToken);
 
-        return Task.FromResult(booking.ToInfo());
+        return booking?.ToInfo() ?? throw new BookingNotFoundException(bookingId);
     }
 }

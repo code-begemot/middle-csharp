@@ -3,38 +3,42 @@ using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests.Services;
 
-public class EventServiceQueryTests
+public class EventServiceQueryTests : IDisposable
 {
     private static readonly DateTime Jan10 = new(2025, 1, 10, 10, 0, 0);
     private static readonly DateTime Jan12 = new(2025, 1, 12, 10, 0, 0);
     private static readonly DateTime Jan15 = new(2025, 1, 15, 9, 0, 0);
 
-    private readonly EventService _service = new();
+    private readonly TestApplication _app = new();
 
-    private void SeedSampleEvents()
+    private IEventService Service => _app.Get<IEventService>();
+
+    public void Dispose() => _app.Dispose();
+
+    private async Task SeedSampleEventsAsync()
     {
-        _service.Create(TestData.NewEvent("Team Meeting", Jan10, Jan10.AddHours(1)));
-        _service.Create(TestData.NewEvent("team retro", Jan12, Jan12.AddHours(2)));
-        _service.Create(TestData.NewEvent("Conference", Jan15, Jan15.AddHours(9)));
+        await Service.CreateAsync(TestData.NewEvent("Team Meeting", Jan10, Jan10.AddHours(1)));
+        await Service.CreateAsync(TestData.NewEvent("team retro", Jan12, Jan12.AddHours(2)));
+        await Service.CreateAsync(TestData.NewEvent("Conference", Jan15, Jan15.AddHours(9)));
     }
 
-    private void SeedFiveEvents()
+    private async Task SeedFiveEventsAsync()
     {
         for (var i = 1; i <= 5; i++)
         {
             var start = new DateTime(2025, 1, i, 10, 0, 0);
-            _service.Create(TestData.NewEvent($"Event {i}", start, start.AddHours(1)));
+            await Service.CreateAsync(TestData.NewEvent($"Event {i}", start, start.AddHours(1)));
         }
     }
 
     [Fact]
-    public void FilterByTitle_IsCaseInsensitiveAndPartial()
+    public async Task FilterByTitle_IsCaseInsensitiveAndPartial()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("TEAM", null, null), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter("TEAM", null, null), 1, 10);
 
         // Assert
         Assert.Equal(2, result.TotalCount);
@@ -42,13 +46,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByTitle_PartialMatch_ReturnsMatchingEvent()
+    public async Task FilterByTitle_PartialMatch_ReturnsMatchingEvent()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("meet", null, null), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter("meet", null, null), 1, 10);
 
         // Assert
         var item = Assert.Single(result.Items);
@@ -56,13 +60,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByTitle_NoMatches_ReturnsEmptyPage()
+    public async Task FilterByTitle_NoMatches_ReturnsEmptyPage()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("unknown", null, null), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter("unknown", null, null), 1, 10);
 
         // Assert
         Assert.Equal(0, result.TotalCount);
@@ -70,26 +74,26 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByTitle_WhitespaceOnly_IsIgnored()
+    public async Task FilterByTitle_WhitespaceOnly_IsIgnored()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("   ", null, null), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter("   ", null, null), 1, 10);
 
         // Assert
         Assert.Equal(3, result.TotalCount);
     }
 
     [Fact]
-    public void FilterByFrom_ReturnsEventsStartingAtOrAfterDate()
+    public async Task FilterByFrom_ReturnsEventsStartingAtOrAfterDate()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter(null, Jan12, null), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter(null, Jan12, null), 1, 10);
 
         // Assert
         Assert.Equal(2, result.TotalCount);
@@ -97,13 +101,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByTo_ReturnsEventsEndingAtOrBeforeDate()
+    public async Task FilterByTo_ReturnsEventsEndingAtOrBeforeDate()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter(null, null, Jan12.AddHours(2)), 1, 10);
+        var result = await Service.GetAllAsync(new EventFilter(null, null, Jan12.AddHours(2)), 1, 10);
 
         // Assert
         Assert.Equal(2, result.TotalCount);
@@ -111,26 +115,32 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByDateRange_ReturnsEventsInsideRange()
+    public async Task FilterByDateRange_ReturnsEventsInsideRange()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter(null, Jan10.AddDays(1), Jan15.AddHours(9)), 1, 10);
+        var result = await Service.GetAllAsync(
+            new EventFilter(null, Jan10.AddDays(1), Jan15.AddHours(9)),
+            1,
+            10);
 
         // Assert
         Assert.Equal(2, result.TotalCount);
     }
 
     [Fact]
-    public void CombinedFilters_TitleAndFrom_AppliesBothConditions()
+    public async Task CombinedFilters_TitleAndFrom_AppliesBothConditions()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("team", Jan10.AddDays(1), null), 1, 10);
+        var result = await Service.GetAllAsync(
+            new EventFilter("team", Jan10.AddDays(1), null),
+            1,
+            10);
 
         // Assert
         var item = Assert.Single(result.Items);
@@ -138,13 +148,16 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void CombinedFilters_TitleAndTo_AppliesBothConditions()
+    public async Task CombinedFilters_TitleAndTo_AppliesBothConditions()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(new EventFilter("team", null, Jan10.AddDays(1)), 1, 10);
+        var result = await Service.GetAllAsync(
+            new EventFilter("team", null, Jan10.AddDays(1)),
+            1,
+            10);
 
         // Assert
         var item = Assert.Single(result.Items);
@@ -152,13 +165,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void CombinedFilters_TitleAndDateRange_AppliesAllConditions()
+    public async Task CombinedFilters_TitleAndDateRange_AppliesAllConditions()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
         // Act
-        var result = _service.GetAll(
+        var result = await Service.GetAllAsync(
             new EventFilter("o", Jan10.AddDays(1), Jan15.AddHours(9)),
             1,
             10);
@@ -169,26 +182,27 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void FilterByDateRange_FromAfterTo_ThrowsValidation()
+    public async Task FilterByDateRange_FromAfterTo_ThrowsValidation()
     {
         // Arrange
-        SeedSampleEvents();
+        await SeedSampleEventsAsync();
 
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(
-            () => _service.GetAll(new EventFilter(null, Jan15, Jan10), 1, 10));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.GetAllAsync(new EventFilter(null, Jan15, Jan10), 1, 10));
 
+        // Assert
         Assert.Equal("From must be earlier than or equal to To.", exception.Message);
     }
 
     [Fact]
-    public void Pagination_FirstPage_ReturnsRequestedSize()
+    public async Task Pagination_FirstPage_ReturnsRequestedSize()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 2);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 2);
 
         // Assert
         Assert.Equal(5, result.TotalCount);
@@ -199,13 +213,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_SecondPage_ReturnsNextSlice()
+    public async Task Pagination_SecondPage_ReturnsNextSlice()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 2, 2);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 2, 2);
 
         // Assert
         Assert.Equal(2, result.Items.Count);
@@ -214,13 +228,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_LastPage_ReturnsRemainder()
+    public async Task Pagination_LastPage_ReturnsRemainder()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 3, 2);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 3, 2);
 
         // Assert
         var item = Assert.Single(result.Items);
@@ -228,13 +242,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_PageBeyondRange_ReturnsEmptyItems()
+    public async Task Pagination_PageBeyondRange_ReturnsEmptyItems()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 10, 2);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 10, 2);
 
         // Assert
         Assert.Equal(5, result.TotalCount);
@@ -243,13 +257,13 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_HugePage_ReturnsEmptyItemsInsteadOfFirstPage()
+    public async Task Pagination_HugePage_ReturnsEmptyItemsInsteadOfFirstPage()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, int.MaxValue, 100);
+        var result = await Service.GetAllAsync(TestData.NoFilter, int.MaxValue, 100);
 
         // Assert
         Assert.Equal(5, result.TotalCount);
@@ -257,50 +271,58 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_PageSizeAboveMaximum_ThrowsValidation()
+    public async Task Pagination_PageSizeAboveMaximum_ThrowsValidation()
     {
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(
-            () => _service.GetAll(TestData.NoFilter, 1, 101));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.GetAllAsync(TestData.NoFilter, 1, 101));
 
+        // Assert
         Assert.Equal("PageSize must be between 1 and 100.", exception.Message);
     }
 
     [Fact]
-    public void Pagination_PageSizeAtMaximum_IsAllowed()
+    public async Task Pagination_PageSizeAtMaximum_IsAllowed()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 100);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 100);
 
         // Assert
         Assert.Equal(5, result.Items.Count);
     }
 
     [Fact]
-    public void Pagination_PageSizeLargerThanTotal_ReturnsAllItems()
+    public async Task Pagination_PageSizeLargerThanTotal_ReturnsAllItems()
     {
         // Arrange
-        SeedFiveEvents();
+        await SeedFiveEventsAsync();
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 50);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 50);
 
         // Assert
         Assert.Equal(5, result.Items.Count);
     }
 
     [Fact]
-    public void Pagination_OrdersEventsByStartAt()
+    public async Task Pagination_OrdersEventsByStartAt()
     {
         // Arrange
-        _service.Create(TestData.NewEvent("Later", new DateTime(2025, 3, 1, 10, 0, 0), new DateTime(2025, 3, 1, 11, 0, 0)));
-        _service.Create(TestData.NewEvent("Earlier", new DateTime(2025, 2, 1, 10, 0, 0), new DateTime(2025, 2, 1, 11, 0, 0)));
+        await Service.CreateAsync(TestData.NewEvent(
+            "Later",
+            new DateTime(2025, 3, 1, 10, 0, 0),
+            new DateTime(2025, 3, 1, 11, 0, 0)));
+
+        await Service.CreateAsync(TestData.NewEvent(
+            "Earlier",
+            new DateTime(2025, 2, 1, 10, 0, 0),
+            new DateTime(2025, 2, 1, 11, 0, 0)));
 
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 10);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
 
         // Assert
         Assert.Equal("Earlier", result.Items[0].Title);
@@ -308,24 +330,26 @@ public class EventServiceQueryTests
     }
 
     [Fact]
-    public void Pagination_InvalidPage_ThrowsValidation()
+    public async Task Pagination_InvalidPage_ThrowsValidation()
     {
         // Act & Assert
-        Assert.Throws<EventValidationException>(() => _service.GetAll(TestData.NoFilter, 0, 10));
+        await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.GetAllAsync(TestData.NoFilter, 0, 10));
     }
 
     [Fact]
-    public void Pagination_InvalidPageSize_ThrowsValidation()
+    public async Task Pagination_InvalidPageSize_ThrowsValidation()
     {
         // Act & Assert
-        Assert.Throws<EventValidationException>(() => _service.GetAll(TestData.NoFilter, 1, 0));
+        await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.GetAllAsync(TestData.NoFilter, 1, 0));
     }
 
     [Fact]
-    public void GetAll_EmptyStore_ReturnsEmptyPageWithZeroTotals()
+    public async Task GetAll_EmptyStore_ReturnsEmptyPageWithZeroTotals()
     {
         // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 10);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
 
         // Assert
         Assert.Equal(0, result.TotalCount);

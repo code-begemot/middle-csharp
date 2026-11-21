@@ -1,20 +1,26 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using MiddleCsharp.DataAccess;
+using MiddleCsharp.Models;
 
 namespace MiddleCsharp.BackgroundServices;
 
 public sealed class BookingProcessingService : BackgroundService
 {
-    private readonly BookingProcessor _processor;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly BookingProcessingOptions _options;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<BookingProcessingService> _logger;
 
     public BookingProcessingService(
-        BookingProcessor processor,
+        IServiceScopeFactory scopeFactory,
         IOptions<BookingProcessingOptions> options,
+        TimeProvider timeProvider,
         ILogger<BookingProcessingService> logger)
     {
-        _processor = processor;
+        _scopeFactory = scopeFactory;
         _options = options.Value;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -29,7 +35,7 @@ public sealed class BookingProcessingService : BackgroundService
         {
             try
             {
-                await _processor.ProcessPendingAsync(stoppingToken);
+                await ProcessPendingAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -42,7 +48,7 @@ public sealed class BookingProcessingService : BackgroundService
 
             try
             {
-                await Task.Delay(_options.PollingInterval, stoppingToken);
+                await Task.Delay(_options.PollingInterval, _timeProvider, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -51,5 +57,51 @@ public sealed class BookingProcessingService : BackgroundService
         }
 
         _logger.LogInformation("Booking processing stopped");
+    }
+
+    internal async Task<int> ProcessPendingAsync(CancellationToken cancellationToken)
+    {
+        List<Guid> pendingIds;
+
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            pendingIds = await context.Bookings
+                .AsNoTracking()
+                .Where(booking => booking.Status == BookingStatus.Pending)
+                .OrderBy(booking => booking.CreatedAt)
+                .ThenBy(booking => booking.Id)
+                .Select(booking => booking.Id)
+                .ToListAsync(cancellationToken);
+        }
+
+        if (pendingIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var bookingIds = string.Join(", ", pendingIds);
+
+        _logger.LogInformation(
+            "Processing {Count} pending {BookingLabel} in parallel: {BookingIds}",
+            pendingIds.Count,
+            pendingIds.Count == 1 ? "booking" : "bookings",
+            bookingIds);
+
+        var results = await Task.WhenAll(
+            pendingIds.Select(bookingId => ProcessBookingAsync(bookingId, cancellationToken)));
+
+        return results.Count(processed => processed);
+    }
+
+    private async Task<bool> ProcessBookingAsync(Guid bookingId, CancellationToken cancellationToken)
+    {
+        await Task.Delay(_options.ProcessingDelay, _timeProvider, cancellationToken);
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<BookingProcessor>();
+
+        return await processor.ProcessAsync(bookingId, cancellationToken);
     }
 }

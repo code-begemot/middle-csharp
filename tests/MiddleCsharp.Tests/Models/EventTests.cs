@@ -4,11 +4,46 @@ namespace MiddleCsharp.Tests.Models;
 
 public class EventTests
 {
+    private static readonly DateTime StartAt = new(2025, 1, 10, 10, 0, 0);
+    private static readonly DateTime EndAt = new(2025, 1, 10, 11, 0, 0);
+
+    private static Event CreateEvent(int totalSeats = 5) =>
+        new("Meeting", "Sprint planning", StartAt, EndAt, totalSeats);
+
+    [Fact]
+    public void Constructor_InitializesSeatsAndId()
+    {
+        // Act
+        var evt = CreateEvent(totalSeats: 7);
+
+        // Assert
+        Assert.NotEqual(Guid.Empty, evt.Id);
+        Assert.Equal(7, evt.TotalSeats);
+        Assert.Equal(7, evt.AvailableSeats);
+    }
+
+    [Fact]
+    public void Constructor_NormalizesDatesToUnspecified()
+    {
+        // Arrange
+        var utcStart = new DateTime(2025, 1, 10, 10, 0, 0, DateTimeKind.Utc);
+        var utcEnd = new DateTime(2025, 1, 10, 11, 0, 0, DateTimeKind.Utc);
+
+        // Act
+        var evt = new Event("Meeting", null, utcStart, utcEnd, totalSeats: 5);
+
+        // Assert
+        Assert.Equal(DateTimeKind.Unspecified, evt.StartAt.Kind);
+        Assert.Equal(DateTimeKind.Unspecified, evt.EndAt.Kind);
+        Assert.Equal(utcStart.Ticks, evt.StartAt.Ticks);
+        Assert.Equal(utcEnd.Ticks, evt.EndAt.Ticks);
+    }
+
     [Fact]
     public void TryReserveSeats_SeatsAvailable_DecrementsAndReturnsTrue()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 3, AvailableSeats = 3 };
+        var evt = CreateEvent(totalSeats: 3);
 
         // Act
         var reserved = evt.TryReserveSeats();
@@ -23,7 +58,8 @@ public class EventTests
     public void TryReserveSeats_NotEnoughSeats_ReturnsFalseAndKeepsSeats()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 1, AvailableSeats = 0 };
+        var evt = CreateEvent(totalSeats: 1);
+        evt.TryReserveSeats();
 
         // Act
         var reserved = evt.TryReserveSeats();
@@ -37,7 +73,8 @@ public class EventTests
     public void TryReserveSeats_CountGreaterThanAvailable_ReturnsFalse()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 5, AvailableSeats = 2 };
+        var evt = CreateEvent(totalSeats: 5);
+        evt.TryReserveSeats(3);
 
         // Act
         var reserved = evt.TryReserveSeats(3);
@@ -51,7 +88,7 @@ public class EventTests
     public void TryReserveSeats_MultipleSeats_DecrementsByCount()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 5, AvailableSeats = 5 };
+        var evt = CreateEvent(totalSeats: 5);
 
         // Act
         var reserved = evt.TryReserveSeats(2);
@@ -67,7 +104,7 @@ public class EventTests
     public void TryReserveSeats_NonPositiveCount_Throws(int count)
     {
         // Arrange
-        var evt = new Event { TotalSeats = 5, AvailableSeats = 5 };
+        var evt = CreateEvent();
 
         // Act & Assert
         Assert.Throws<ArgumentOutOfRangeException>(() => evt.TryReserveSeats(count));
@@ -77,7 +114,8 @@ public class EventTests
     public void ReleaseSeats_ReturnsSeatToPool()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 3, AvailableSeats = 1 };
+        var evt = CreateEvent(totalSeats: 3);
+        evt.TryReserveSeats(2);
 
         // Act
         evt.ReleaseSeats();
@@ -90,7 +128,7 @@ public class EventTests
     public void ReleaseSeats_NeverExceedsTotalSeats()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 3, AvailableSeats = 3 };
+        var evt = CreateEvent(totalSeats: 3);
 
         // Act
         evt.ReleaseSeats();
@@ -105,23 +143,30 @@ public class EventTests
     public void ReleaseSeats_NonPositiveCount_Throws(int count)
     {
         // Arrange
-        var evt = new Event { TotalSeats = 5, AvailableSeats = 5 };
+        var evt = CreateEvent();
 
         // Act & Assert
         Assert.Throws<ArgumentOutOfRangeException>(() => evt.ReleaseSeats(count));
     }
 
     [Fact]
-    public void Clone_CopiesSeats()
+    public void UpdateDetails_ChangesFieldsAndPreservesSeats()
     {
         // Arrange
-        var evt = new Event { TotalSeats = 7, AvailableSeats = 4 };
+        var evt = CreateEvent(totalSeats: 5);
+        evt.TryReserveSeats(2);
+        var updatedStart = new DateTime(2025, 2, 1, 9, 0, 0);
+        var updatedEnd = new DateTime(2025, 2, 1, 10, 0, 0);
 
         // Act
-        var clone = evt.Clone();
+        evt.UpdateDetails("Updated", "New description", updatedStart, updatedEnd);
 
         // Assert
-        Assert.Equal(7, clone.TotalSeats);
-        Assert.Equal(4, clone.AvailableSeats);
+        Assert.Equal("Updated", evt.Title);
+        Assert.Equal("New description", evt.Description);
+        Assert.Equal(updatedStart, evt.StartAt);
+        Assert.Equal(updatedEnd, evt.EndAt);
+        Assert.Equal(5, evt.TotalSeats);
+        Assert.Equal(3, evt.AvailableSeats);
     }
 }

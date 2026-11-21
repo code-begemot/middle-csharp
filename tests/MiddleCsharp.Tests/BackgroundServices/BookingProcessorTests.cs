@@ -1,5 +1,6 @@
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
 using MiddleCsharp.Models;
@@ -7,270 +8,185 @@ using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests.BackgroundServices;
 
-public class BookingProcessorTests
+public class BookingProcessorTests : IDisposable
 {
     private static readonly DateTime CreatedAt = new(2025, 1, 10, 10, 0, 0, DateTimeKind.Utc);
     private static readonly DateTimeOffset Now =
         new(2025, 1, 10, 10, 0, 5, TimeSpan.Zero);
 
-    private readonly EventService _eventService = new();
-    private readonly InMemoryBookingStore _store = new();
-    private readonly FixedTimeProvider _timeProvider = new(Now);
+    private readonly TestApplication _app;
+
+    public BookingProcessorTests()
+    {
+        _app = new TestApplication(new FixedTimeProvider(Now));
+    }
+
+    public void Dispose() => _app.Dispose();
+
+    private BookingProcessor Processor => _app.Get<BookingProcessor>();
+    private IEventService EventService => _app.Get<IEventService>();
+    private IBookingService BookingService => _app.Get<IBookingService>();
 
     [Fact]
-    public async Task ProcessPendingAsync_PendingBooking_ConfirmsIt()
+    public async Task ProcessAsync_PendingBooking_ConfirmsIt()
     {
         // Arrange
-        var eventId = CreateEvent();
-        var booking = Booking.CreatePending(eventId, CreatedAt);
-        _store.Add(booking);
-        var processor = CreateProcessor(TimeSpan.Zero);
+        var eventId = await CreateEventAsync();
+        var bookingId = await CreateBookingDirectlyAsync(eventId);
 
         // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
+        var processed = await Processor.ProcessAsync(bookingId, CancellationToken.None);
 
         // Assert
-        Assert.Equal(1, processed);
-        var stored = _store.GetById(booking.Id);
-        Assert.Equal(BookingStatus.Confirmed, stored!.Status);
+        Assert.True(processed);
+        var stored = await GetBookingAsync(bookingId);
+        Assert.Equal(BookingStatus.Confirmed, stored.Status);
         Assert.Equal(Now.UtcDateTime, stored.ProcessedAt);
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_NoPendingBookings_ReturnsZero()
+    public async Task ProcessAsync_UnknownBooking_ReturnsFalse()
     {
-        // Arrange
-        var processor = CreateProcessor(TimeSpan.Zero);
-
         // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
+        var processed = await Processor.ProcessAsync(Guid.NewGuid(), CancellationToken.None);
 
         // Assert
-        Assert.Equal(0, processed);
+        Assert.False(processed);
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_MultiplePendingBookings_ConfirmsAll()
+    public async Task ProcessAsync_AlreadyProcessedBooking_IsSkipped()
     {
         // Arrange
-        var eventId = CreateEvent();
-        var first = Booking.CreatePending(eventId, CreatedAt);
-        var second = Booking.CreatePending(eventId, CreatedAt);
-        _store.Add(first);
-        _store.Add(second);
-        var processor = CreateProcessor(TimeSpan.Zero);
+        var eventId = await CreateEventAsync();
+        var bookingId = await CreateBookingDirectlyAsync(eventId);
 
-        // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Equal(2, processed);
-        Assert.Empty(_store.GetPending());
-        Assert.Equal(BookingStatus.Confirmed, _store.GetById(first.Id)!.Status);
-        Assert.Equal(BookingStatus.Confirmed, _store.GetById(second.Id)!.Status);
-    }
-
-    [Fact]
-    public async Task ProcessPendingAsync_MultiplePendingBookings_StartsDelaysInParallel()
-    {
-        // Arrange
-        var eventId = CreateEvent();
-        var bookings = Enumerable.Range(0, 4)
-            .Select(_ => Booking.CreatePending(eventId, CreatedAt))
-            .ToList();
-
-        foreach (var booking in bookings)
+        using (var scope = _app.CreateScope())
         {
-            _store.Add(booking);
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var booking = await context.Bookings.SingleAsync(stored => stored.Id == bookingId);
+            booking.Reject(CreatedAt.AddSeconds(1));
+            await context.SaveChangesAsync();
         }
 
-        var timeProvider = new DelayTrackingTimeProvider(bookings.Count);
-        var processor = CreateProcessor(TimeSpan.FromSeconds(30), timeProvider: timeProvider);
-        using var cancellationTokenSource = new CancellationTokenSource();
+        // Act
+        var processed = await Processor.ProcessAsync(bookingId, CancellationToken.None);
+
+        // Assert
+        Assert.False(processed);
+        Assert.Equal(BookingStatus.Rejected, (await GetBookingAsync(bookingId)).Status);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ConfirmedBooking_KeepsReservedSeat()
+    {
+        // Arrange
+        var eventId = await CreateEventAsync(totalSeats: 2);
+        var booking = await BookingService.CreateBookingAsync(eventId);
 
         // Act
-        var processing = processor.ProcessPendingAsync(cancellationTokenSource.Token);
+        await Processor.ProcessAsync(booking.Id, CancellationToken.None);
 
-        try
+        // Assert
+        Assert.Equal(BookingStatus.Confirmed, (await GetBookingAsync(booking.Id)).Status);
+        Assert.Equal(1, (await EventService.GetByIdAsync(eventId)).AvailableSeats);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ConfirmFailure_RejectsBookingAndReleasesSeat()
+    {
+        // Arrange
+        var interceptor = new FailOnceOnConfirmInterceptor();
+        using var app = new TestApplication(
+            new FixedTimeProvider(Now),
+            options => options.AddInterceptors(interceptor));
+
+        Guid eventId;
+        Guid bookingId;
+
+        using (var scope = app.CreateScope())
         {
-            await timeProvider.ExpectedDelaysStarted.WaitAsync(TimeSpan.FromSeconds(10));
+            var eventService = scope.ServiceProvider.GetRequiredService<IEventService>();
+            var bookingService = scope.ServiceProvider.GetRequiredService<IBookingService>();
+            eventId = (await eventService.CreateAsync(TestData.NewEvent(totalSeats: 2))).Id;
+            bookingId = (await bookingService.CreateBookingAsync(eventId)).Id;
         }
-        finally
-        {
-            cancellationTokenSource.Cancel();
-        }
 
-        // Assert
-        Assert.Equal(bookings.Count, timeProvider.MaxActiveDelays);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
-        Assert.Equal(bookings.Count, _store.GetPending().Count);
-    }
-
-    [Fact]
-    public async Task ProcessPendingAsync_AlreadyProcessedBooking_IsSkipped()
-    {
-        // Arrange
-        var booking = Booking.CreatePending(CreateEvent(), CreatedAt);
-        _store.Add(booking);
-        _store.TryUpdateStatus(
-            booking.Id,
-            BookingStatus.Pending,
-            BookingStatus.Rejected,
-            CreatedAt.AddSeconds(1));
-        var processor = CreateProcessor(TimeSpan.Zero);
+        using var processorScope = app.CreateScope();
+        var processor = processorScope.ServiceProvider.GetRequiredService<BookingProcessor>();
 
         // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
+        var processed = await processor.ProcessAsync(bookingId, CancellationToken.None);
 
         // Assert
-        Assert.Equal(0, processed);
-        Assert.Equal(BookingStatus.Rejected, _store.GetById(booking.Id)!.Status);
+        Assert.True(processed);
+        using var assertScope = app.CreateScope();
+        var context = assertScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var storedBooking = await context.Bookings.SingleAsync(stored => stored.Id == bookingId);
+        var storedEvent = await context.Events.SingleAsync(stored => stored.Id == eventId);
+        Assert.Equal(BookingStatus.Rejected, storedBooking.Status);
+        Assert.Equal(2, storedEvent.AvailableSeats);
     }
 
     [Fact]
-    public async Task ProcessPendingAsync_DeletedEvent_RejectsBooking()
+    public async Task ProcessAsync_Cancellation_ThrowsAndLeavesBookingPending()
     {
         // Arrange
-        var eventId = CreateEvent();
-        var booking = Booking.CreatePending(eventId, CreatedAt);
-        _store.Add(booking);
-        _eventService.Delete(eventId);
-        var processor = CreateProcessor(TimeSpan.Zero);
-
-        // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Equal(1, processed);
-        var stored = _store.GetById(booking.Id);
-        Assert.Equal(BookingStatus.Rejected, stored!.Status);
-        Assert.Equal(Now.UtcDateTime, stored.ProcessedAt);
-    }
-
-    [Fact]
-    public async Task ProcessPendingAsync_ConfirmFailure_RejectsBookingAndReleasesSeat()
-    {
-        // Arrange
-        var eventId = CreateEvent(totalSeats: 2);
-        _eventService.TryReserveSeats(eventId);
-        var booking = Booking.CreatePending(eventId, CreatedAt);
-        var store = new FailingOnConfirmStore { FailingBookingId = booking.Id };
-        store.Add(booking);
-        var processor = CreateProcessor(TimeSpan.Zero, store);
-
-        // Act
-        var processed = await processor.ProcessPendingAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Equal(1, processed);
-        Assert.Equal(BookingStatus.Rejected, store.GetById(booking.Id)!.Status);
-        Assert.Equal(2, _eventService.GetById(eventId).AvailableSeats);
-    }
-
-    [Fact]
-    public async Task ProcessPendingAsync_ConfirmedBooking_KeepsReservedSeat()
-    {
-        // Arrange
-        var eventId = CreateEvent(totalSeats: 2);
-        _eventService.TryReserveSeats(eventId);
-        var booking = Booking.CreatePending(eventId, CreatedAt);
-        _store.Add(booking);
-        var processor = CreateProcessor(TimeSpan.Zero);
-
-        // Act
-        await processor.ProcessPendingAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Equal(BookingStatus.Confirmed, _store.GetById(booking.Id)!.Status);
-        Assert.Equal(1, _eventService.GetById(eventId).AvailableSeats);
-    }
-
-    [Fact]
-    public async Task ProcessPendingAsync_Cancellation_ThrowsAndLeavesBookingPending()
-    {
-        // Arrange
-        var booking = Booking.CreatePending(CreateEvent(), CreatedAt);
-        _store.Add(booking);
-        var processor = CreateProcessor(TimeSpan.FromSeconds(5));
+        var eventId = await CreateEventAsync();
+        var bookingId = await CreateBookingDirectlyAsync(eventId);
         using var cancellationTokenSource = new CancellationTokenSource();
         cancellationTokenSource.Cancel();
 
         // Act & Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => processor.ProcessPendingAsync(cancellationTokenSource.Token));
+            () => Processor.ProcessAsync(bookingId, cancellationTokenSource.Token));
 
-        Assert.Equal(BookingStatus.Pending, _store.GetById(booking.Id)!.Status);
+        Assert.Equal(BookingStatus.Pending, (await GetBookingAsync(bookingId)).Status);
     }
 
-    [Fact]
-    public async Task ProcessPendingAsync_CancellationMidBatch_LeavesBookingsPending()
+    private async Task<Guid> CreateEventAsync(int totalSeats = 10) =>
+        (await EventService.CreateAsync(TestData.NewEvent(totalSeats: totalSeats))).Id;
+
+    private async Task<Guid> CreateBookingDirectlyAsync(Guid eventId)
     {
-        // Arrange
-        var eventId = CreateEvent();
-        var first = Booking.CreatePending(eventId, CreatedAt);
-        var second = Booking.CreatePending(eventId, CreatedAt);
-        _store.Add(first);
-        _store.Add(second);
-        var processor = CreateProcessor(TimeSpan.FromSeconds(5));
-        using var cancellationTokenSource = new CancellationTokenSource();
+        using var scope = _app.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var booking = Booking.CreatePending(eventId, CreatedAt);
+        context.Bookings.Add(booking);
+        await context.SaveChangesAsync();
 
-        // Act
-        var processing = processor.ProcessPendingAsync(cancellationTokenSource.Token);
-        await Task.Delay(50);
-        cancellationTokenSource.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
-
-        // Assert
-        Assert.Equal(BookingStatus.Pending, _store.GetById(first.Id)!.Status);
-        Assert.Equal(BookingStatus.Pending, _store.GetById(second.Id)!.Status);
+        return booking.Id;
     }
 
-    private Guid CreateEvent(int totalSeats = 10) =>
-        _eventService.Create(TestData.NewEvent(totalSeats: totalSeats)).Id;
-
-    private BookingProcessor CreateProcessor(
-        TimeSpan processingDelay,
-        IBookingStore? store = null,
-        TimeProvider? timeProvider = null)
+    private async Task<Booking> GetBookingAsync(Guid bookingId)
     {
-        var options = Options.Create(new BookingProcessingOptions
+        using var scope = _app.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        return await context.Bookings.AsNoTracking().SingleAsync(stored => stored.Id == bookingId);
+    }
+
+    private sealed class FailOnceOnConfirmInterceptor : SaveChangesInterceptor
+    {
+        private int _failed;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
         {
-            ProcessingDelay = processingDelay
-        });
+            var hasConfirmedBooking = eventData.Context?.ChangeTracker
+                .Entries<Booking>()
+                .Any(entry =>
+                    entry.State == EntityState.Modified &&
+                    entry.Entity.Status == BookingStatus.Confirmed) == true;
 
-        return new BookingProcessor(
-            store ?? _store,
-            _eventService,
-            options,
-            timeProvider ?? _timeProvider,
-            NullLogger<BookingProcessor>.Instance);
-    }
-
-    private sealed class FailingOnConfirmStore : IBookingStore
-    {
-        private readonly InMemoryBookingStore _inner = new();
-
-        public required Guid FailingBookingId { get; init; }
-
-        public void Add(Booking booking) => _inner.Add(booking);
-
-        public Booking? GetById(Guid id) => _inner.GetById(id);
-
-        public IReadOnlyList<Booking> GetPending() => _inner.GetPending();
-
-        public bool TryUpdateStatus(
-            Guid id,
-            BookingStatus expectedStatus,
-            BookingStatus newStatus,
-            DateTime processedAt)
-        {
-            if (id == FailingBookingId && newStatus == BookingStatus.Confirmed)
+            if (hasConfirmedBooking && Interlocked.Exchange(ref _failed, 1) == 0)
             {
-                throw new InvalidOperationException("Simulated store failure.");
+                throw new InvalidOperationException("Simulated confirm failure.");
             }
 
-            return _inner.TryUpdateStatus(id, expectedStatus, newStatus, processedAt);
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
     }
 }

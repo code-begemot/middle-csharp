@@ -1,72 +1,41 @@
+using MiddleCsharp.DataAccess;
 using MiddleCsharp.Exceptions;
 using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests.Services;
 
-public class EventServiceCrudTests
+public class EventServiceCrudTests : IDisposable
 {
-    private readonly EventService _service = new();
+    private readonly TestApplication _app = new();
+
+    private IEventService Service => _app.Get<IEventService>();
+
+    public void Dispose() => _app.Dispose();
 
     [Fact]
-    public void Create_ValidEvent_StoresEventAndAssignsId()
+    public async Task Create_ValidEvent_StoresEventAndAssignsId()
     {
         // Act
-        var created = _service.Create(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewEvent());
 
         // Assert
         Assert.NotEqual(Guid.Empty, created.Id);
-        var stored = _service.GetById(created.Id);
+        var stored = await Service.GetByIdAsync(created.Id);
         Assert.Equal(created.Id, stored.Id);
         Assert.Equal("Meeting", stored.Title);
         Assert.Equal("Sprint planning", stored.Description);
     }
 
     [Fact]
-    public void Create_ClientProvidedId_IsIgnored()
+    public async Task GetAll_ReturnsAllStoredEvents()
     {
         // Arrange
-        var clientId = Guid.NewGuid();
+        await Service.CreateAsync(TestData.NewEvent("First"));
+        await Service.CreateAsync(TestData.NewEvent("Second"));
+        await Service.CreateAsync(TestData.NewEvent("Third"));
 
         // Act
-        var created = _service.Create(TestData.NewEvent(id: clientId));
-
-        // Assert
-        Assert.NotEqual(clientId, created.Id);
-        Assert.Single(_service.GetAll(TestData.NoFilter, 1, 10).Items);
-    }
-
-    [Fact]
-    public void Exists_ExistingEvent_ReturnsTrue()
-    {
-        // Arrange
-        var created = _service.Create(TestData.NewEvent());
-
-        // Act & Assert
-        Assert.True(_service.Exists(created.Id));
-    }
-
-    [Fact]
-    public void Exists_UnknownOrDeletedEvent_ReturnsFalse()
-    {
-        // Arrange
-        var created = _service.Create(TestData.NewEvent());
-        _service.Delete(created.Id);
-
-        // Act & Assert
-        Assert.False(_service.Exists(created.Id));
-        Assert.False(_service.Exists(Guid.NewGuid()));
-    }
-
-    [Fact]
-    public void GetAll_ReturnsAllStoredEvents()
-    {
-        // Arrange
-        _service.Create(TestData.NewEvent("First"));
-        _service.Create(TestData.NewEvent("Second"));
-        _service.Create(TestData.NewEvent("Third"));
-
-        // Act
-        var result = _service.GetAll(TestData.NoFilter, 1, 10);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
 
         // Assert
         Assert.Equal(3, result.TotalCount);
@@ -74,59 +43,75 @@ public class EventServiceCrudTests
     }
 
     [Fact]
-    public void GetById_ExistingEvent_ReturnsEvent()
+    public async Task GetById_ExistingEvent_ReturnsEvent()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent("Standup"));
+        var created = await Service.CreateAsync(TestData.NewEvent("Standup"));
 
         // Act
-        var found = _service.GetById(created.Id);
+        var found = await Service.GetByIdAsync(created.Id);
 
         // Assert
         Assert.Equal("Standup", found.Title);
     }
 
     [Fact]
-    public void GetById_ReturnedEvent_IsDetachedFromStore()
+    public async Task GetById_ReturnedEvent_IsNotTracked()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent("Original"));
+        var created = await Service.CreateAsync(TestData.NewEvent("Original"));
+        var fetched = await Service.GetByIdAsync(created.Id);
 
         // Act
-        var fetched = _service.GetById(created.Id);
-        fetched.Title = "Mutated";
+        fetched.UpdateDetails(
+            "Mutated",
+            fetched.Description,
+            fetched.StartAt,
+            fetched.EndAt);
+
+        var context = _app.Get<AppDbContext>();
+        await context.SaveChangesAsync();
 
         // Assert
-        Assert.Equal("Original", _service.GetById(created.Id).Title);
+        Assert.Equal("Original", (await Service.GetByIdAsync(created.Id)).Title);
     }
 
     [Fact]
-    public void GetAll_ReturnedItems_AreDetachedFromStore()
+    public async Task GetAll_ReturnedItems_AreNotTracked()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent("Original"));
+        var created = await Service.CreateAsync(TestData.NewEvent("Original"));
+        var item = Assert.Single((await Service.GetAllAsync(TestData.NoFilter, 1, 10)).Items);
 
         // Act
-        var item = Assert.Single(_service.GetAll(TestData.NoFilter, 1, 10).Items);
-        item.Title = "Mutated";
+        item.UpdateDetails(
+            "Mutated",
+            item.Description,
+            item.StartAt,
+            item.EndAt);
+
+        var context = _app.Get<AppDbContext>();
+        await context.SaveChangesAsync();
 
         // Assert
-        Assert.Equal("Original", _service.GetById(created.Id).Title);
+        Assert.Equal("Original", (await Service.GetByIdAsync(created.Id)).Title);
     }
 
     [Fact]
-    public void Update_ExistingEvent_ReplacesAllFields()
+    public async Task Update_ExistingEvent_ReplacesAllFields()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewEvent());
         var updatedStart = new DateTime(2025, 2, 1, 9, 0, 0);
         var updatedEnd = new DateTime(2025, 2, 1, 10, 0, 0);
 
         // Act
-        _service.Update(created.Id, TestData.NewEvent("Updated", updatedStart, updatedEnd));
+        await Service.UpdateAsync(
+            created.Id,
+            TestData.NewEvent("Updated", updatedStart, updatedEnd));
 
         // Assert
-        var stored = _service.GetById(created.Id);
+        var stored = await Service.GetByIdAsync(created.Id);
         Assert.Equal(created.Id, stored.Id);
         Assert.Equal("Updated", stored.Title);
         Assert.Equal("Sprint planning", stored.Description);
@@ -135,16 +120,19 @@ public class EventServiceCrudTests
     }
 
     [Fact]
-    public void Delete_ExistingEvent_RemovesEvent()
+    public async Task Delete_ExistingEvent_RemovesEvent()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewEvent());
 
         // Act
-        _service.Delete(created.Id);
+        await Service.DeleteAsync(created.Id);
 
         // Assert
-        Assert.Throws<EventNotFoundException>(() => _service.GetById(created.Id));
-        Assert.Equal(0, _service.GetAll(TestData.NoFilter, 1, 10).TotalCount);
+        await Assert.ThrowsAsync<EventNotFoundException>(
+            () => Service.GetByIdAsync(created.Id));
+
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
+        Assert.Equal(0, result.TotalCount);
     }
 }

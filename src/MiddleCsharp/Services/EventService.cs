@@ -1,27 +1,34 @@
-using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
+using MiddleCsharp.DataAccess;
 using MiddleCsharp.DTOs;
 using MiddleCsharp.Exceptions;
 using MiddleCsharp.Models;
 
 namespace MiddleCsharp.Services;
 
-public class EventService : IEventService
+internal sealed class EventService : IEventService
 {
-    private readonly ConcurrentDictionary<Guid, Event> _events = new();
+    private readonly AppDbContext _context;
 
-    public Event GetById(Guid id)
+    public EventService(AppDbContext context)
     {
-        if (!_events.TryGetValue(id, out var evt))
-        {
-            throw new EventNotFoundException(id);
-        }
-
-        return evt.Clone();
+        _context = context;
     }
 
-    public bool Exists(Guid id) => _events.ContainsKey(id);
+    public async Task<Event> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var evt = await _context.Events
+            .AsNoTracking()
+            .SingleOrDefaultAsync(stored => stored.Id == id, cancellationToken);
 
-    public PaginatedResult<Event> GetAll(EventFilter filter, int page, int pageSize)
+        return evt ?? throw new EventNotFoundException(id);
+    }
+
+    public async Task<PaginatedResult<Event>> GetAllAsync(
+        EventFilter filter,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default)
     {
         if (page < 1)
         {
@@ -38,34 +45,37 @@ public class EventService : IEventService
             throw new EventValidationException("From must be earlier than or equal to To.");
         }
 
-        IEnumerable<Event> query = _events.Values.ToList();
+        IQueryable<Event> query = _context.Events.AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(filter.Title))
         {
-            var title = filter.Title.Trim();
-            query = query.Where(e => e.Title.Contains(title, StringComparison.OrdinalIgnoreCase));
+            var title = filter.Title.Trim().ToLower();
+            query = query.Where(evt => evt.Title.ToLower().Contains(title));
         }
 
         if (filter.From.HasValue)
         {
-            query = query.Where(e => e.StartAt >= filter.From.Value);
+            var from = Event.NormalizeToUnspecified(filter.From.Value);
+            query = query.Where(evt => evt.StartAt >= from);
         }
 
         if (filter.To.HasValue)
         {
-            query = query.Where(e => e.EndAt <= filter.To.Value);
+            var to = Event.NormalizeToUnspecified(filter.To.Value);
+            query = query.Where(evt => evt.EndAt <= to);
         }
 
-        var ordered = query
-            .OrderBy(e => e.StartAt)
-            .ThenBy(e => e.Id)
-            .ToList();
-
-        var totalCount = ordered.Count;
+        var totalCount = await query.CountAsync(cancellationToken);
         var skip = ((long)page - 1) * pageSize;
+
         var items = skip >= totalCount
             ? new List<Event>()
-            : ordered.Skip((int)skip).Take(pageSize).Select(e => e.Clone()).ToList();
+            : await query
+                .OrderBy(evt => evt.StartAt)
+                .ThenBy(evt => evt.Id)
+                .Skip((int)skip)
+                .Take(pageSize)
+                .ToListAsync(cancellationToken);
 
         return new PaginatedResult<Event>
         {
@@ -77,7 +87,7 @@ public class EventService : IEventService
         };
     }
 
-    public Event Create(Event newEvent)
+    public async Task<Event> CreateAsync(Event newEvent, CancellationToken cancellationToken = default)
     {
         Validate(newEvent);
 
@@ -86,84 +96,48 @@ public class EventService : IEventService
             throw new EventValidationException("TotalSeats must be greater than 0.");
         }
 
-        var stored = newEvent.Clone();
-        stored.Id = Guid.NewGuid();
-        stored.AvailableSeats = stored.TotalSeats;
-        _events[stored.Id] = stored;
-        return stored.Clone();
+        _context.Events.Add(newEvent);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return newEvent;
     }
 
-    public void Update(Guid id, Event updatedEvent)
+    public async Task UpdateAsync(
+        Guid id,
+        Event updatedEvent,
+        CancellationToken cancellationToken = default)
     {
         Validate(updatedEvent);
 
-        var replacement = updatedEvent.Clone();
-        replacement.Id = id;
+        var stored = await _context.Events.SingleOrDefaultAsync(evt => evt.Id == id, cancellationToken)
+            ?? throw new EventNotFoundException(id);
 
-        while (true)
-        {
-            if (!_events.TryGetValue(id, out var existing))
-            {
-                throw new EventNotFoundException(id);
-            }
+        stored.UpdateDetails(
+            updatedEvent.Title,
+            updatedEvent.Description,
+            updatedEvent.StartAt,
+            updatedEvent.EndAt);
 
-            replacement.TotalSeats = existing.TotalSeats;
-            replacement.AvailableSeats = existing.AvailableSeats;
-
-            if (_events.TryUpdate(id, replacement, existing))
-            {
-                return;
-            }
-        }
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public bool TryReserveSeats(Guid id, int count = 1)
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        while (true)
+        await SeatReservationLock.Instance.WaitAsync(cancellationToken);
+
+        try
         {
-            if (!_events.TryGetValue(id, out var existing))
-            {
-                throw new EventNotFoundException(id);
-            }
+            var stored = await _context.Events
+                .Include(evt => evt.Bookings)
+                .SingleOrDefaultAsync(evt => evt.Id == id, cancellationToken)
+                ?? throw new EventNotFoundException(id);
 
-            var replacement = existing.Clone();
-
-            if (!replacement.TryReserveSeats(count))
-            {
-                return false;
-            }
-
-            if (_events.TryUpdate(id, replacement, existing))
-            {
-                return true;
-            }
+            _context.Events.Remove(stored);
+            await _context.SaveChangesAsync(cancellationToken);
         }
-    }
-
-    public void ReleaseSeats(Guid id, int count = 1)
-    {
-        while (true)
+        finally
         {
-            if (!_events.TryGetValue(id, out var existing))
-            {
-                throw new EventNotFoundException(id);
-            }
-
-            var replacement = existing.Clone();
-            replacement.ReleaseSeats(count);
-
-            if (_events.TryUpdate(id, replacement, existing))
-            {
-                return;
-            }
-        }
-    }
-
-    public void Delete(Guid id)
-    {
-        if (!_events.TryRemove(id, out _))
-        {
-            throw new EventNotFoundException(id);
+            SeatReservationLock.Instance.Release();
         }
     }
 
@@ -172,6 +146,18 @@ public class EventService : IEventService
         if (string.IsNullOrWhiteSpace(evt.Title))
         {
             throw new EventValidationException("Title is required.");
+        }
+
+        if (evt.Title.Length > EventConstraints.TitleMaxLength)
+        {
+            throw new EventValidationException(
+                $"Title must be at most {EventConstraints.TitleMaxLength} characters long.");
+        }
+
+        if (evt.Description?.Length > EventConstraints.DescriptionMaxLength)
+        {
+            throw new EventValidationException(
+                $"Description must be at most {EventConstraints.DescriptionMaxLength} characters long.");
         }
 
         if (evt.StartAt == default)

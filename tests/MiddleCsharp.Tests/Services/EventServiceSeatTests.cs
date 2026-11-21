@@ -3,134 +3,71 @@ using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests.Services;
 
-public class EventServiceSeatTests
+public class EventServiceSeatTests : IDisposable
 {
-    private readonly EventService _service = new();
+    private readonly TestApplication _app = new();
+
+    private IEventService EventService => _app.Get<IEventService>();
+    private IBookingService BookingService => _app.Get<IBookingService>();
+
+    public void Dispose() => _app.Dispose();
 
     [Fact]
-    public void Create_SetsAvailableSeatsToTotalSeats()
+    public async Task Create_SetsAvailableSeatsToTotalSeats()
     {
         // Act
-        var created = _service.Create(TestData.NewEvent(totalSeats: 5));
+        var created = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 5));
 
         // Assert
         Assert.Equal(5, created.TotalSeats);
         Assert.Equal(5, created.AvailableSeats);
-        Assert.Equal(5, _service.GetById(created.Id).AvailableSeats);
+        Assert.Equal(5, (await EventService.GetByIdAsync(created.Id)).AvailableSeats);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public void Create_NonPositiveTotalSeats_ThrowsValidationException(int totalSeats)
+    public async Task Create_NonPositiveTotalSeats_ThrowsValidationException(int totalSeats)
     {
         // Act & Assert
-        Assert.Throws<EventValidationException>(
-            () => _service.Create(TestData.NewEvent(totalSeats: totalSeats)));
+        await Assert.ThrowsAsync<EventValidationException>(
+            () => EventService.CreateAsync(TestData.NewEvent(totalSeats: totalSeats)));
     }
 
     [Fact]
-    public void Update_PreservesSeats()
+    public async Task Update_PreservesSeats()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent(totalSeats: 5));
-        _service.TryReserveSeats(created.Id, 2);
+        var created = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 5));
+        await BookingService.CreateBookingAsync(created.Id);
+        await BookingService.CreateBookingAsync(created.Id);
 
         // Act
-        _service.Update(created.Id, TestData.NewEvent("Updated", totalSeats: 100));
+        await EventService.UpdateAsync(
+            created.Id,
+            TestData.NewEvent("Updated", totalSeats: 100));
 
         // Assert
-        var stored = _service.GetById(created.Id);
+        var stored = await EventService.GetByIdAsync(created.Id);
         Assert.Equal(5, stored.TotalSeats);
         Assert.Equal(3, stored.AvailableSeats);
         Assert.Equal("Updated", stored.Title);
     }
 
     [Fact]
-    public void TryReserveSeats_SeatsAvailable_DecrementsStoredEvent()
+    public async Task Delete_EventWithBookings_RemovesBookings()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent(totalSeats: 3));
+        var created = await EventService.CreateAsync(TestData.NewEvent());
+        var booking = await BookingService.CreateBookingAsync(created.Id);
 
         // Act
-        var reserved = _service.TryReserveSeats(created.Id);
+        await EventService.DeleteAsync(created.Id);
 
         // Assert
-        Assert.True(reserved);
-        Assert.Equal(2, _service.GetById(created.Id).AvailableSeats);
-    }
-
-    [Fact]
-    public void TryReserveSeats_NoSeatsLeft_ReturnsFalse()
-    {
-        // Arrange
-        var created = _service.Create(TestData.NewEvent(totalSeats: 1));
-        _service.TryReserveSeats(created.Id);
-
-        // Act
-        var reserved = _service.TryReserveSeats(created.Id);
-
-        // Assert
-        Assert.False(reserved);
-        Assert.Equal(0, _service.GetById(created.Id).AvailableSeats);
-    }
-
-    [Fact]
-    public void TryReserveSeats_UnknownEvent_ThrowsNotFound()
-    {
-        // Arrange
-        var unknownId = Guid.NewGuid();
-
-        // Act & Assert
-        var exception = Assert.Throws<EventNotFoundException>(
-            () => _service.TryReserveSeats(unknownId));
-
-        Assert.Equal(unknownId, exception.Id);
-    }
-
-    [Fact]
-    public void ReleaseSeats_RestoresStoredEvent()
-    {
-        // Arrange
-        var created = _service.Create(TestData.NewEvent(totalSeats: 3));
-        _service.TryReserveSeats(created.Id);
-        _service.TryReserveSeats(created.Id);
-
-        // Act
-        _service.ReleaseSeats(created.Id);
-
-        // Assert
-        Assert.Equal(2, _service.GetById(created.Id).AvailableSeats);
-    }
-
-    [Fact]
-    public void ReleaseSeats_UnknownEvent_ThrowsNotFound()
-    {
-        // Arrange
-        var unknownId = Guid.NewGuid();
-
-        // Act & Assert
-        var exception = Assert.Throws<EventNotFoundException>(
-            () => _service.ReleaseSeats(unknownId));
-
-        Assert.Equal(unknownId, exception.Id);
-    }
-
-    [Fact]
-    public async Task TryReserveSeats_ConcurrentRequests_NeverExceedsCapacity()
-    {
-        // Arrange
-        var created = _service.Create(TestData.NewEvent(totalSeats: 5));
-
-        // Act
-        var tasks = Enumerable.Range(0, 20)
-            .Select(_ => Task.Run(() => _service.TryReserveSeats(created.Id)))
-            .ToArray();
-
-        var results = await Task.WhenAll(tasks);
-
-        // Assert
-        Assert.Equal(5, results.Count(reserved => reserved));
-        Assert.Equal(0, _service.GetById(created.Id).AvailableSeats);
+        await Assert.ThrowsAsync<BookingNotFoundException>(
+            () => BookingService.GetBookingByIdAsync(booking.Id));
+        await Assert.ThrowsAsync<EventNotFoundException>(
+            () => EventService.GetByIdAsync(created.Id));
     }
 }
