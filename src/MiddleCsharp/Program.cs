@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
 using MiddleCsharp.Filters;
@@ -49,9 +50,15 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 
-builder.Services.AddSingleton<IEventService, EventService>();
-builder.Services.AddSingleton<IBookingStore, InMemoryBookingStore>();
-builder.Services.AddSingleton<IBookingService, BookingService>();
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
+
+builder.Services.AddDbContext<AppDbContext>(
+    options => options.UseNpgsql(connectionString));
+
+builder.Services.AddScoped<IEventService, EventService>();
+builder.Services.AddScoped<IBookingService, BookingService>();
+builder.Services.AddScoped<BookingProcessor>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services
     .AddOptions<BookingProcessingOptions>()
@@ -63,10 +70,15 @@ builder.Services
         options => options.ProcessingDelay >= TimeSpan.Zero,
         "BookingProcessing:ProcessingDelay must be zero or greater.")
     .ValidateOnStart();
-builder.Services.AddSingleton<BookingProcessor>();
 builder.Services.AddHostedService<BookingProcessingService>();
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    context.Database.EnsureCreated();
+}
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseStatusCodePages();

@@ -28,9 +28,11 @@ public class BookingsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public async Task<ActionResult<BookingInfo>> GetById(Guid id)
+    public async Task<ActionResult<BookingInfo>> GetById(
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var booking = await _bookingService.GetBookingByIdAsync(id);
+        var booking = await _bookingService.GetBookingByIdAsync(id, cancellationToken);
         return Ok(booking);
     }
 }

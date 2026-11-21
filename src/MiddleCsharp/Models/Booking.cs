@@ -4,6 +4,7 @@ public class Booking
 {
     public Guid Id { get; private set; }
     public Guid EventId { get; private set; }
+    public Event Event { get; private set; } = null!;
     public BookingStatus Status { get; private set; }
     public DateTime CreatedAt { get; private set; }
     public DateTime? ProcessedAt { get; private set; }
@@ -36,15 +37,6 @@ public class Booking
     public void Confirm(DateTime processedAt) => Complete(BookingStatus.Confirmed, processedAt);
 
     public void Reject(DateTime processedAt) => Complete(BookingStatus.Rejected, processedAt);
-
-    public Booking Clone() => new()
-    {
-        Id = Id,
-        EventId = EventId,
-        Status = Status,
-        CreatedAt = CreatedAt,
-        ProcessedAt = ProcessedAt
-    };
 
     private void Complete(BookingStatus status, DateTime processedAt)
     {

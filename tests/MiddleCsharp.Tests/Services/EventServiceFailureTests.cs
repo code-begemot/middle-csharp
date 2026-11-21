@@ -4,133 +4,192 @@ using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests.Services;
 
-public class EventServiceFailureTests
+public class EventServiceFailureTests : IDisposable
 {
-    private readonly EventService _service = new();
+    private readonly TestApplication _app = new();
+
+    private IEventService Service => _app.Get<IEventService>();
+
+    public void Dispose() => _app.Dispose();
 
     [Fact]
-    public void GetById_UnknownId_ThrowsNotFound()
+    public async Task GetById_UnknownId_ThrowsNotFound()
     {
         // Arrange
         var unknownId = Guid.NewGuid();
 
         // Act
-        var exception = Assert.Throws<EventNotFoundException>(() => _service.GetById(unknownId));
+        var exception = await Assert.ThrowsAsync<EventNotFoundException>(
+            () => Service.GetByIdAsync(unknownId));
 
         // Assert
         Assert.Equal(unknownId, exception.Id);
     }
 
     [Fact]
-    public void Update_UnknownId_ThrowsNotFound()
+    public async Task Update_UnknownId_ThrowsNotFound()
     {
         // Arrange
         var unknownId = Guid.NewGuid();
 
         // Act & Assert
-        Assert.Throws<EventNotFoundException>(() => _service.Update(unknownId, TestData.NewEvent()));
+        await Assert.ThrowsAsync<EventNotFoundException>(
+            () => Service.UpdateAsync(unknownId, TestData.NewEvent()));
     }
 
     [Fact]
-    public void Delete_UnknownId_ThrowsNotFound()
+    public async Task Delete_UnknownId_ThrowsNotFound()
     {
         // Act & Assert
-        Assert.Throws<EventNotFoundException>(() => _service.Delete(Guid.NewGuid()));
+        await Assert.ThrowsAsync<EventNotFoundException>(
+            () => Service.DeleteAsync(Guid.NewGuid()));
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void Create_EmptyTitle_ThrowsValidation(string title)
+    public async Task Create_EmptyTitle_ThrowsValidation(string title)
     {
         // Arrange
         var invalid = TestData.NewEvent(title);
 
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
         Assert.Equal("Title is required.", exception.Message);
     }
 
     [Fact]
-    public void Create_DefaultStartAt_ThrowsValidation()
+    public async Task Create_TitleTooLong_ThrowsValidation()
     {
         // Arrange
-        var invalid = new Event
-        {
-            Title = "Meeting",
-            StartAt = default,
-            EndAt = TestData.DefaultEndAt
-        };
+        var invalid = TestData.NewEvent(new string('t', EventConstraints.TitleMaxLength + 1));
 
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
+        Assert.Equal(
+            $"Title must be at most {EventConstraints.TitleMaxLength} characters long.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task Create_DescriptionTooLong_ThrowsValidation()
+    {
+        // Arrange
+        var invalid = new Event(
+            "Meeting",
+            new string('d', EventConstraints.DescriptionMaxLength + 1),
+            TestData.DefaultStartAt,
+            TestData.DefaultEndAt,
+            totalSeats: 10);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
+        Assert.Equal(
+            $"Description must be at most {EventConstraints.DescriptionMaxLength} characters long.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task Create_DefaultStartAt_ThrowsValidation()
+    {
+        // Arrange
+        var invalid = new Event(
+            "Meeting",
+            null,
+            default,
+            TestData.DefaultEndAt,
+            totalSeats: 10);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
         Assert.Equal("StartAt is required.", exception.Message);
     }
 
     [Fact]
-    public void Create_DefaultEndAt_ThrowsValidation()
+    public async Task Create_DefaultEndAt_ThrowsValidation()
     {
         // Arrange
-        var invalid = new Event
-        {
-            Title = "Meeting",
-            StartAt = TestData.DefaultStartAt,
-            EndAt = default
-        };
+        var invalid = new Event(
+            "Meeting",
+            null,
+            TestData.DefaultStartAt,
+            default,
+            totalSeats: 10);
 
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
         Assert.Equal("EndAt is required.", exception.Message);
     }
 
     [Fact]
-    public void Create_EndBeforeStart_ThrowsValidation()
+    public async Task Create_EndBeforeStart_ThrowsValidation()
     {
         // Arrange
         var invalid = TestData.NewEvent(
             startAt: new DateTime(2025, 1, 10, 11, 0, 0),
             endAt: new DateTime(2025, 1, 10, 10, 0, 0));
 
-        // Act & Assert
-        var exception = Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        // Act
+        var exception = await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
+
+        // Assert
         Assert.Equal("EndAt must be later than StartAt.", exception.Message);
     }
 
     [Fact]
-    public void Create_EndEqualsStart_ThrowsValidation()
+    public async Task Create_EndEqualsStart_ThrowsValidation()
     {
         // Arrange
         var moment = new DateTime(2025, 1, 10, 10, 0, 0);
         var invalid = TestData.NewEvent(startAt: moment, endAt: moment);
 
         // Act & Assert
-        Assert.Throws<EventValidationException>(() => _service.Create(invalid));
+        await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.CreateAsync(invalid));
     }
 
     [Fact]
-    public void Update_EndBeforeStart_ThrowsValidation()
+    public async Task Update_EndBeforeStart_ThrowsValidation()
     {
         // Arrange
-        var created = _service.Create(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewEvent());
         var invalid = TestData.NewEvent(
             startAt: new DateTime(2025, 1, 10, 11, 0, 0),
             endAt: new DateTime(2025, 1, 10, 10, 0, 0));
 
         // Act & Assert
-        Assert.Throws<EventValidationException>(() => _service.Update(created.Id, invalid));
+        await Assert.ThrowsAsync<EventValidationException>(
+            () => Service.UpdateAsync(created.Id, invalid));
     }
 
     [Fact]
-    public void Create_InvalidEvent_DoesNotStoreIt()
+    public async Task Create_InvalidEvent_DoesNotStoreIt()
     {
         // Arrange
         var invalid = TestData.NewEvent("");
 
         // Act
-        var create = () => _service.Create(invalid);
+        var create = () => Service.CreateAsync(invalid);
 
         // Assert
-        Assert.Throws<EventValidationException>(create);
-        Assert.Equal(0, _service.GetAll(TestData.NoFilter, 1, 10).TotalCount);
+        await Assert.ThrowsAsync<EventValidationException>(create);
+        var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
+        Assert.Equal(0, result.TotalCount);
     }
 }

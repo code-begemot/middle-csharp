@@ -30,9 +30,16 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public ActionResult<PaginatedResult<EventResponse>> GetAll([FromQuery] GetEventsQuery query)
+    public async Task<ActionResult<PaginatedResult<EventResponse>>> GetAll(
+        [FromQuery] GetEventsQuery query,
+        CancellationToken cancellationToken)
     {
-        var result = _eventService.GetAll(query.ToFilter(), query.Page, query.PageSize);
+        var result = await _eventService.GetAllAsync(
+            query.ToFilter(),
+            query.Page,
+            query.PageSize,
+            cancellationToken);
+
         return Ok(result.ToResponse());
     }
 
@@ -49,9 +56,12 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public ActionResult<EventResponse> GetById(Guid id)
+    public async Task<ActionResult<EventResponse>> GetById(
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        return Ok(_eventService.GetById(id).ToResponse());
+        var evt = await _eventService.GetByIdAsync(id, cancellationToken);
+        return Ok(evt.ToResponse());
     }
 
     [HttpPost]
@@ -75,9 +85,11 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public ActionResult<EventResponse> Create([FromBody] CreateEventRequest request)
+    public async Task<ActionResult<EventResponse>> Create(
+        [FromBody] CreateEventRequest request,
+        CancellationToken cancellationToken)
     {
-        var created = _eventService.Create(request.ToEntity());
+        var created = await _eventService.CreateAsync(request.ToEntity(), cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created.ToResponse());
     }
 
@@ -103,9 +115,12 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public IActionResult Update(Guid id, [FromBody] UpdateEventRequest request)
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] UpdateEventRequest request,
+        CancellationToken cancellationToken)
     {
-        _eventService.Update(id, request.ToEntity());
+        await _eventService.UpdateAsync(id, request.ToEntity(), cancellationToken);
         return NoContent();
     }
 
@@ -126,9 +141,11 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public async Task<ActionResult<BookingInfo>> Book(Guid id)
+    public async Task<ActionResult<BookingInfo>> Book(
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var booking = await _bookingService.CreateBookingAsync(id);
+        var booking = await _bookingService.CreateBookingAsync(id, cancellationToken);
 
         return AcceptedAtAction(
             nameof(BookingsController.GetById),
@@ -147,9 +164,9 @@ public class EventsController : ControllerBase
         typeof(ProblemDetails),
         StatusCodes.Status500InternalServerError,
         "application/problem+json")]
-    public IActionResult Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
-        _eventService.Delete(id);
+        await _eventService.DeleteAsync(id, cancellationToken);
         return NoContent();
     }
 }

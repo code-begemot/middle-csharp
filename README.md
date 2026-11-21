@@ -1,10 +1,11 @@
 # Middle C# — Events & Bookings API
 
-Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней.
+Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней. Пятый спринт заменил хранение данных в памяти на PostgreSQL через Entity Framework Core.
 
 ## Требования
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) или Docker Engine с Compose
 - Git
 
 ## Запуск
@@ -12,7 +13,31 @@
 ```bash
 git clone https://github.com/code-begemot/middle-csharp.git
 cd middle-csharp
+docker compose up -d
 dotnet run --project src/MiddleCsharp
+```
+
+Перед запуском приложения PostgreSQL должен быть готов принимать подключения. `docker compose up -d` поднимает контейнер `middle-csharp-postgres` с healthcheck; проверить состояние можно командой:
+
+```bash
+docker compose ps
+```
+
+Строка подключения по умолчанию находится в `src/MiddleCsharp/appsettings.json`:
+
+```json
+"ConnectionStrings": {
+  "DefaultConnection": "Host=localhost;Port=5432;Database=eventapi;Username=postgres;Password=postgres"
+}
+```
+
+Для другого окружения строку можно переопределить переменной окружения `ConnectionStrings__DefaultConnection` или через user secrets. Локальные логин и пароль `postgres/postgres` предназначены только для учебного запуска.
+
+При первом запуске приложение создаёт базу `eventapi` и таблицы через `EnsureCreated()`. Если схема менялась, проще пересоздать контейнер и volume:
+
+```bash
+docker compose down -v
+docker compose up -d
 ```
 
 По умолчанию запускается http-профиль, приложение слушает:
@@ -38,8 +63,10 @@ dotnet dev-certs https --trust
 
 ```bash
 dotnet build          # собирает решение целиком (API + тесты)
-dotnet test           # запускает юнит-тесты сервисов, хранилища, middleware и фоновой обработки
+dotnet test           # запускает юнит-тесты сервисов, middleware и фоновой обработки
 ```
+
+Тесты используют EF Core InMemory и не требуют запущенного PostgreSQL или Docker.
 
 ## API
 
@@ -70,6 +97,8 @@ dotnet test           # запускает юнит-тесты сервисов,
 | `AvailableSeats` | `int` | да | Текущее количество свободных мест |
 
 При создании события `AvailableSeats` равно `TotalSeats`. Каждая успешная бронь уменьшает `AvailableSeats` на 1; если мест нет, возвращается `409 Conflict`. Место возвращается в пул, если бронь отклонена из-за ошибки обработки. Через `PUT /events/{id}` ёмкость не меняется: `TotalSeats` и `AvailableSeats` сохраняются из текущего состояния события.
+
+`StartAt`/`EndAt` события хранятся в PostgreSQL как `timestamp without time zone`: API принимает `DateTime` без часового пояса и сохраняет настенное время. Смещение (`Z` или `+03:00`) при разборе отбрасывается. `CreatedAt`/`ProcessedAt` броней — это UTC-моменты, они хранятся как `timestamp with time zone` и возвращаются с `Z`.
 
 ## Фильтрация и пагинация `GET /events`
 
@@ -137,13 +166,15 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 | `CreatedAt` | `DateTime` | да | Время создания брони (UTC) |
 | `ProcessedAt` | `DateTime?` | нет | Время обработки брони фоновым сервисом |
 
+Брони хранятся в таблице `bookings` и связаны с событием внешним ключом `EventId`. При удалении события его брони удаляются каскадно (`ON DELETE CASCADE`): после `DELETE /events/{id}` запрос `GET /bookings/{id}` для такой брони возвращает `404`.
+
 ### Статусы `BookingStatus`
 
 | Статус | Значение |
 |---|---|
 | `Pending` | Бронь создана и ожидает обработки |
 | `Confirmed` | Бронь подтверждена фоновым сервисом |
-| `Rejected` | Бронь отклонена: событие удалено до обработки или при обработке произошла ошибка |
+| `Rejected` | Бронь отклонена при ошибке обработки; зарезервированное место возвращено в событие |
 
 В JSON статус передаётся строкой: `"status": "Pending"`.
 
@@ -199,14 +230,14 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 ### Фоновая обработка
 
-`BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. Сервис:
+`BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. `BackgroundService` — синглтон, а `AppDbContext` — scoped, поэтому сервис получает `IServiceScopeFactory` и не зависит от scoped-сервисов напрямую. Сервис:
 
-- раз в секунду опрашивает хранилище на наличие броней в статусе `Pending` (`BookingProcessing:PollingInterval`, по умолчанию 1 секунда);
-- передаёт всю пачку `Pending`-броней в `BookingProcessor`;
+- раз в секунду опрашивает базу на наличие броней в статусе `Pending` (`BookingProcessing:PollingInterval`, по умолчанию 1 секунда);
+- в коротком scope получает `AppDbContext`, извлекает id `Pending`-броней и закрывает scope;
 - обрабатывает брони **параллельно**: для каждой запускается отдельная задача, результаты собираются через `Task.WhenAll`;
-- для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе. Задержка выполняется до захвата семафора, поэтому пачка из N броней занимает примерно `ProcessingDelay`, а не N × `ProcessingDelay`;
-- под семафором `SemaphoreSlim(1, 1)` проверяет, существует ли событие, и переводит бронь в `Confirmed` с заполнением `ProcessedAt`;
-- если событие к моменту обработки удалено, бронь переходит в `Rejected` с заполненным `ProcessedAt`;
+- для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе. Задержка выполняется параллельно для всей пачки;
+- после задержки создаёт **отдельный scope** на каждую бронь, получает из него scoped `BookingProcessor` с собственным `DbContext` и переводит бронь в `Confirmed` с заполнением `ProcessedAt`;
+- если событие удалено, его брони удаляются каскадно; если к моменту обработки бронь уже исчезла, она пропускается;
 - если при обработке произошла непредвиденная ошибка, бронь переводится в `Rejected`, а зарезервированное место возвращается в событие;
 - логирует старт пачки с количеством и id броней, подтверждение, отказ и ошибки через `ILogger`; сбой одной брони не останавливает остальные;
 - корректно завершается по `CancellationToken` при остановке приложения: незавершённые брони остаются `Pending`.
@@ -224,16 +255,20 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 ### Синхронизация и защита от овербукинга
 
-`BookingService` — синглтон, поэтому все запросы на бронирование проходят через один `private readonly object _bookingLock`. Под `lock` выполняется критическая секция:
+`BookingService` — scoped-сервис, но все его экземпляры в процессе используют один общий `static SemaphoreSlim(1, 1)`. Внутри критической секции:
 
-1. проверка свободных мест и их резерв (`TryReserveSeats`);
-2. создание и сохранение брони.
+1. из `_context.Events` загружается событие;
+2. проверяются свободные места и вызывается `TryReserveSeats`;
+3. создаётся бронь и добавляется в `_context.Bookings`;
+4. один `SaveChangesAsync` сохраняет и новую бронь, и уменьшенный `AvailableSeats` в одной транзакции.
 
-Если мест нет, `TryReserveSeats` возвращает `false`, и сервис выбрасывает `NoAvailableSeatsException`, которую `ExceptionHandlingMiddleware` превращает в `409 Conflict`. Чтение брони (`GET /bookings/{id}`) не блокируется. Если сохранение брони не удалось, зарезервированное место возвращается через `ReleaseSeats`.
+Если мест нет, `TryReserveSeats` возвращает `false`, и сервис выбрасывает `NoAvailableSeatsException`, которую `ExceptionHandlingMiddleware` превращает в `409 Conflict`. Чтение брони (`GET /bookings/{id}`) не блокируется. Если `SaveChangesAsync` завершился ошибкой, транзакция откатывается, трекер изменений очищается, и место не остаётся занятым.
 
-В фоновой обработке используется `SemaphoreSlim(1, 1)`: `lock` нельзя применять вместе с `await`, а семафор умеет асинхронно ждать. Он защищает обновление статуса брони и возврат места при отказе.
+Тот же семафор используется при возврате места в `BookingProcessor`, если бронь отклонена из-за ошибки обработки. Это защищает пару «прочитать свободные места → изменить их» от lost update в рамках одного процесса.
 
-Почему `lock` + `SemaphoreSlim`, а не только `ConcurrentDictionary`: конкурентная проблема не в отдельной операции, а в паре «прочитать свободные места → решить, что место есть → создать бронь». Без блокировки два потока могут одновременно увидеть одно и то же свободное место и создать две брони. `ConcurrentDictionary` делает атомарными отдельные операции над словарём, но не эту последовательность.
+Почему семафор, а не `lock`: внутри критической секции теперь есть `await` (запросы EF Core и `SaveChangesAsync`), а `lock` нельзя удерживать через `await`. `SemaphoreSlim.WaitAsync` умеет асинхронно ждать.
+
+Ограничение: семафор синхронизирует только один экземпляр приложения. Для нескольких экземпляров нужна блокировка на уровне PostgreSQL или optimistic concurrency; это остаётся вне рамок учебного проекта.
 
 Сценарий овербукинга: событие на 3 места, 5 одновременных запросов на бронь. Ровно 3 запроса получают `202 Accepted`, остальные 2 — `409 Conflict`; `AvailableSeats` в итоге равно 0, а количество броней не превышает `TotalSeats`.
 
@@ -259,7 +294,7 @@ curl -s "http://localhost:5027/events/$EVENT_ID"
 2. `POST /events/{id}/book` — получить `202 Accepted`, тело брони и `Location`.
 3. Сразу выполнить `GET /bookings/{bookingId}` — статус `Pending`, `processedAt` пустой.
 4. Подождать 2–3 секунды и повторить запрос — статус `Confirmed`, `processedAt` заполнен.
-5. Если удалить событие до обработки брони, она перейдёт в `Rejected` с заполненным `processedAt`.
+5. Если удалить событие, его брони удалятся каскадно; последующий `GET /bookings/{id}` вернёт `404`.
 6. Если мест не осталось, очередной `POST /events/{id}/book` вернёт `409 Conflict`.
 
 ## Формат ошибок
@@ -331,7 +366,8 @@ API принимает и возвращает DTO, а не доменную м�
 
 ### Правила валидации
 
-- `Title` — обязательное поле;
+- `Title` — обязательное поле, не длиннее 200 символов;
+- `Description` — необязательное поле, не длиннее 2000 символов;
 - `StartAt` — обязательное поле;
 - `EndAt` — обязательное поле, должно быть **позже** `StartAt`;
 - `TotalSeats` — обязательное поле при создании, целое число больше 0;
@@ -356,48 +392,61 @@ curl -X POST http://localhost:5027/events \
   }'
 ```
 
-## Хранилище
+## База данных
 
-In-memory хранилища на `ConcurrentDictionary`: отдельно события (`EventService`) и бронирования (`InMemoryBookingStore`). Данные сохраняются только на время работы процесса и очищаются при перезапуске. Наружу сервисы и хранилище отдают копии объектов, поэтому изменение полученного DTO не влияет на сохранённые данные.
+Данные хранятся в PostgreSQL; доступ идёт через Entity Framework Core. In-memory хранилища и `ConcurrentDictionary` больше не используются.
 
-## Соответствие заданию четвёртого спринта
+- `AppDbContext` содержит `DbSet<Event> Events` и `DbSet<Booking> Bookings`, конфигурации подключаются через `ApplyConfigurationsFromAssembly`.
+- Маппинг описан в `DataAccess/Configurations` через `IEntityTypeConfiguration<T>` (Fluent API): имена таблиц `events`/`bookings`, первичные ключи с `ValueGeneratedNever()`, обязательность и максимальные длины строк, `Status` как строка, внешний ключ `bookings.EventId → events.Id` с каскадным удалением, индексы по `events.StartAt` и `bookings.Status, CreatedAt`.
+- `AppDbContext` — scoped. `EventService` и `BookingService` тоже scoped и работают с `_context.Events`/`_context.Bookings` напрямую.
+- Схема создаётся при старте через `EnsureCreated()`: база и таблицы создаются, если их ещё нет. Повторный запуск ничего не ломает. Миграции в этом спринте не используются; `EnsureCreated` с ними не совместим, поэтому при переходе на миграции БД нужно пересоздать. При изменении модели проще пересоздать volume.
+- Данные сохраняются после перезапуска приложения. Контейнер и volume можно остановить через `docker compose down` (данные сохранятся) или удалить через `docker compose down -v`.
+
+Проверить таблицы можно так:
+
+```bash
+docker compose exec postgres psql -U postgres -d eventapi -c "\dt"
+docker compose exec postgres psql -U postgres -d eventapi -c "select \"Id\", \"Title\", \"AvailableSeats\" from events;"
+```
+
+## Соответствие заданию пятого спринта
 
 | Требование | Реализация в проекте |
 |---|---|
-| Ограничение мест события | `Event.TotalSeats`, `Event.AvailableSeats`, `TryReserveSeats`, `ReleaseSeats` |
-| `AvailableSeats == TotalSeats` при создании | `EventService.Create` |
-| Защита от овербукинга | `lock (_bookingLock)` в `BookingService.CreateBookingAsync` |
-| `409 Conflict` при отсутствии мест | `NoAvailableSeatsException` и маппинг в `ExceptionHandlingMiddleware` |
-| Параллельная фоновая обработка | `BookingProcessor` (`Task.WhenAll`) + `SemaphoreSlim`, запускается из `BookingProcessingService` |
-| Потокобезопасное обновление хранилищ | `ConcurrentDictionary` + `TryUpdate`-циклы в `EventService`, `SemaphoreSlim` в `BookingProcessor` |
-| Тесты на конкурентность | `BookingServiceTests`, `EventServiceSeatTests`, `BookingProcessorTests` |
+| PostgreSQL вместо памяти | `docker-compose.yml`, `UseNpgsql`, `EnsureCreated` |
+| EF Core | пакеты `Microsoft.EntityFrameworkCore` и `Npgsql.EntityFrameworkCore.PostgreSQL` |
+| `AppDbContext` и `DbSet` | `DataAccess/AppDbContext.cs` |
+| Fluent API | `DataAccess/Configurations/EventConfiguration.cs`, `BookingConfiguration.cs` |
+| Приватные конструкторы и навигации | `Event`/`Booking` с приватными конструкторами без параметров, `Event.Bookings`, `Booking.Event` |
+| Сервисы работают с `AppDbContext` | `EventService`, `BookingService`; async-методы и `SaveChangesAsync` |
+| Scoped-регистрации | `AddDbContext`, scoped `IEventService`/`IBookingService`/`BookingProcessor` |
+| Фоновая обработка со scopes | `BookingProcessingService` + `IServiceScopeFactory`: отдельный scope на выборку id и на каждую бронь |
+| Тесты | EF Core InMemory, уникальная база на тест, scope на конкурентный запрос |
 
-В задании фоновый сервис назван `BookingBackgroundService`, а хранилище событий — `InMemoryEventStore`. В проекте эти роли выполняют `BookingProcessingService` + `BookingProcessor` и `EventService` соответственно.
+`BookingProcessor` в проекте — scoped-обработчик одной брони; пачку и scopes координирует `BookingProcessingService`. В задании фоновый сервис назван `BookingBackgroundService` — эта роль у `BookingProcessingService`.
 
 ## Тесты
 
 Отдельный проект `tests/MiddleCsharp.Tests` на xUnit, ссылается на `src/MiddleCsharp`. Покрыто:
 
-- CRUD: создание (включая игнорирование `id` из запроса), чтение списка и по id, обновление, удаление; возвращаемые объекты изолированы от внутреннего хранилища;
-- неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`;
-- валидация DTO: обязательность дат, `EndAt <= StartAt`, валидный запрос;
+- CRUD через `AppDbContext`: создание, чтение списка и по id, обновление, удаление; проверка, что чтение через `AsNoTracking` не оставляет сущности в трекере;
+- неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`, слишком длинные `Title`/`Description`;
+- валидация DTO: обязательность дат и `TotalSeats`, `EndAt <= StartAt`, `StringLength`, валидный запрос;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
-- пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустое хранилище;
+- пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустая база;
 - middleware: `400`/`404`/`409`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
 - фильтр `ProblemDetailsContentTypeFilter`: `415` от MVC отдаётся с `application/problem+json`, обычные `ObjectResult` не меняются;
-- сущность `Event`: резерв одного и нескольких мест, нехватка мест, возврат мест, ограничение сверху `TotalSeats`, ненулевое количество, копирование мест в `Clone()`;
-- `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, атомарные резерв и возврат в хранилище, конкурентные запросы не превышают ёмкость;
+- сущность `Event`: конструктор, нормализация дат, резерв одного и нескольких мест, нехватка мест, возврат мест, ограничение сверху `TotalSeats`, ненулевое количество, `UpdateDetails` сохраняет места;
+- `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, каскадное удаление броней вместе с событием;
 - сущность `Booking`: создание в статусе `Pending`, `Confirm`/`Reject`, заполнение `ProcessedAt`, запрет повторной обработки, проверка обязательных дат;
-- хранилище броней: добавление и чтение, изоляция копий, выборка только `Pending`, атомарная смена статуса;
-- `EventService.Exists`: существующее, удалённое и неизвестное событие;
 - `BookingService`: создание брони для существующего события, уменьшение `AvailableSeats`, бронирование до лимита мест, `NoAvailableSeatsException` после исчерпания, уникальные `Id`, чтение по `Id` без расхода места, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
-- конкурентность `BookingService`: 5 мест и 20 параллельных запросов (`Task.Run` + `Task.WhenAll`) дают ровно 5 успешных броней и 15 отказов, `AvailableSeats = 0`; 10 мест и 10 параллельных запросов дают 10 уникальных `Id`;
-- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, параллельный запуск задержек пачки (детерминированный счётчик одновременных задержек через `TimeProvider`, без измерения wall-clock), пропуск уже обработанных броней, отказ брони удалённого события, отказ и возврат места при ошибке подтверждения, сохранение места при успешном подтверждении, отмена по `CancellationToken` (в том числе посреди пачки);
-- `BookingProcessingService`: запуск опроса, обработка брони и корректная остановка по `CancellationToken`.
+- конкурентность `BookingService`: 5 мест и 20 параллельных запросов, каждый в отдельном scope, дают ровно 5 успешных броней и 15 отказов, `AvailableSeats = 0`; 10 мест и 10 параллельных запросов дают 10 уникальных `Id`;
+- `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, пропуск уже обработанных и отсутствующих броней, отказ и возврат места при ошибке подтверждения (через `SaveChangesInterceptor`), сохранение места при успешном подтверждении, отмена по `CancellationToken`;
+- `BookingProcessingService`: пакетная обработка, параллельный запуск задержек (детерминированный счётчик одновременных задержек через `TimeProvider`, без измерения wall-clock), запуск опроса и корректная остановка по `CancellationToken`.
 
-Всего 124 теста.
+Всего 112 тестов.
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert); тесты сервисов работают со свежими экземплярами `EventService`, `InMemoryBookingStore` и `FixedTimeProvider`. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик. Тесты на конкурентность бронирования используют реальный параллелизм (`Task.Run` + `Task.WhenAll`), а не последовательные вызовы.
+Тесты написаны по принципу AAA (Arrange-Act-Assert). Каждый тест получает `TestApplication` с уникальной InMemory-базой, поэтому тесты не влияют друг на друга. Конкурентные тесты создают отдельный scope и отдельный `AppDbContext` на каждый параллельный запрос. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик.
 
 ```bash
 dotnet test
@@ -407,6 +456,7 @@ dotnet test
 
 ```
 middle-csharp/
+├── docker-compose.yml
 ├── src/
 │   └── MiddleCsharp/
 │       ├── BackgroundServices/
@@ -417,8 +467,10 @@ middle-csharp/
 │       │   ├── BookingsController.cs
 │       │   └── EventsController.cs
 │       ├── DataAccess/
-│       │   ├── IBookingStore.cs
-│       │   └── InMemoryBookingStore.cs
+│       │   ├── AppDbContext.cs
+│       │   └── Configurations/
+│       │       ├── BookingConfiguration.cs
+│       │       └── EventConfiguration.cs
 │       ├── DTOs/
 │       │   ├── BookingInfo.cs
 │       │   ├── BookingMappingExtensions.cs
@@ -442,14 +494,16 @@ middle-csharp/
 │       ├── Models/
 │       │   ├── Booking.cs
 │       │   ├── BookingStatus.cs
-│       │   └── Event.cs
+│       │   ├── Event.cs
+│       │   └── EventConstraints.cs
 │       ├── Services/
 │       │   ├── IBookingService.cs
 │       │   ├── BookingService.cs
 │       │   ├── IEventService.cs
 │       │   ├── EventService.cs
 │       │   ├── EventFilter.cs
-│       │   └── PaginationLimits.cs
+│       │   ├── PaginationLimits.cs
+│       │   └── SeatReservationLock.cs
 │       ├── Program.cs
 │       └── middle-csharp.csproj
 ├── tests/
@@ -457,8 +511,6 @@ middle-csharp/
 │       ├── BackgroundServices/
 │       │   ├── BookingProcessingServiceTests.cs
 │       │   └── BookingProcessorTests.cs
-│       ├── DataAccess/
-│       │   └── InMemoryBookingStoreTests.cs
 │       ├── DTOs/
 │       │   └── EventRequestValidationTests.cs
 │       ├── Filters/
@@ -476,6 +528,7 @@ middle-csharp/
 │       │   └── EventServiceSeatTests.cs
 │       ├── DelayTrackingTimeProvider.cs
 │       ├── FixedTimeProvider.cs
+│       ├── TestApplication.cs
 │       ├── TestData.cs
 │       └── MiddleCsharp.Tests.csproj
 ├── middle-csharp.http
