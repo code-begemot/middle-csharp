@@ -78,10 +78,11 @@ builder.Services.AddHostedService<BookingProcessingService>();
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+if (!EF.IsDesignTime)
 {
+    await using var scope = app.Services.CreateAsyncScope();
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    context.Database.EnsureCreated();
+    await context.Database.MigrateAsync();
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
