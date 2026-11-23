@@ -17,6 +17,12 @@ internal sealed class BookingRepository : IBookingRepository
             .AsNoTracking()
             .SingleOrDefaultAsync(stored => stored.Id == id, cancellationToken);
 
+    public async Task<Booking?> GetByIdForUpdateAsync(
+        Guid id,
+        CancellationToken cancellationToken = default) =>
+        await _context.Bookings
+            .SingleOrDefaultAsync(stored => stored.Id == id, cancellationToken);
+
     public async Task<Booking?> GetForProcessingAsync(
         Guid id,
         CancellationToken cancellationToken = default) =>

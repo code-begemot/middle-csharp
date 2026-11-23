@@ -28,7 +28,7 @@ internal sealed class BookingProcessor
     {
         try
         {
-            var booking = await _bookings.GetForProcessingAsync(bookingId, cancellationToken);
+            var booking = await _bookings.GetByIdForUpdateAsync(bookingId, cancellationToken);
 
             if (booking is null || booking.Status != BookingStatus.Pending)
             {

@@ -65,11 +65,28 @@ public sealed class BookingRepositoryTests : RepositoryTestBase
     }
 
     [Fact]
-    public async Task GetForProcessingAsync_IncludesEvent()
+    public async Task GetByIdForUpdateAsync_DoesNotLoadEvent()
     {
         // Arrange
         var createdEvent = await AddEventAsync();
         var booking = await AddPendingBookingAsync(createdEvent.Id);
+        Context.ChangeTracker.Clear();
+
+        // Act
+        var stored = await Bookings.GetByIdForUpdateAsync(booking.Id);
+
+        // Assert
+        Assert.NotNull(stored);
+        Assert.Null(stored.Event);
+    }
+
+    [Fact]
+    public async Task GetForProcessingAsync_IncludesEvent_WhenEventIsNotTracked()
+    {
+        // Arrange
+        var createdEvent = await AddEventAsync();
+        var booking = await AddPendingBookingAsync(createdEvent.Id);
+        Context.ChangeTracker.Clear();
 
         // Act
         var stored = await Bookings.GetForProcessingAsync(booking.Id);
@@ -95,7 +112,7 @@ public sealed class BookingRepositoryTests : RepositoryTestBase
             createdEvent.Id,
             new DateTime(2025, 1, 10, 10, 1, 0, DateTimeKind.Utc));
 
-        var tracked = await Bookings.GetForProcessingAsync(confirmed.Id);
+        var tracked = await Bookings.GetByIdForUpdateAsync(confirmed.Id);
         Assert.NotNull(tracked);
         tracked.Confirm(new DateTime(2025, 1, 10, 10, 5, 0, DateTimeKind.Utc));
         await UnitOfWork.SaveChangesAsync();
@@ -162,7 +179,7 @@ public sealed class BookingRepositoryTests : RepositoryTestBase
         var processedAt = new DateTime(2025, 1, 10, 10, 0, 5, DateTimeKind.Utc);
 
         // Act
-        var stored = await Bookings.GetForProcessingAsync(booking.Id);
+        var stored = await Bookings.GetByIdForUpdateAsync(booking.Id);
         Assert.NotNull(stored);
         stored.Confirm(processedAt);
         await UnitOfWork.SaveChangesAsync();
@@ -190,10 +207,12 @@ public sealed class BookingRepositoryTests : RepositoryTestBase
         await UnitOfWork.SaveChangesAsync();
 
         var processedAt = new DateTime(2025, 1, 10, 10, 0, 5, DateTimeKind.Utc);
+        Context.ChangeTracker.Clear();
 
         // Act
         var storedBooking = await Bookings.GetForProcessingAsync(booking.Id);
         Assert.NotNull(storedBooking);
+        Assert.NotNull(storedBooking.Event);
         storedBooking.Reject(processedAt);
         storedBooking.Event.ReleaseSeats();
         await UnitOfWork.SaveChangesAsync();
