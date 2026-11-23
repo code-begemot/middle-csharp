@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.Models;
-using MiddleCsharp.Services;
 
 namespace MiddleCsharp.IntegrationTests;
 
@@ -165,13 +164,14 @@ public sealed class EventRepositoryTests : RepositoryTestBase
     {
         // Arrange
         await SeedSampleEventsAsync();
-        var to = new DateTime(2025, 1, 12, 12, 0, 0);
+        var to = new DateTime(2025, 1, 12, 11, 0, 0);
 
         // Act
         var result = await Events.GetPageAsync(new EventFilter(null, null, to), 1, 10);
 
         // Assert
         Assert.Equal(2, result.TotalCount);
+        Assert.Contains(result.Items, evt => evt.Title == "team retro");
         Assert.All(result.Items, evt => Assert.True(evt.EndAt <= to));
     }
 
@@ -190,6 +190,61 @@ public sealed class EventRepositoryTests : RepositoryTestBase
         // Assert
         var item = Assert.Single(result.Items);
         Assert.Equal("team retro", item.Title);
+    }
+
+    [Fact]
+    public async Task GetPageAsync_FilterByFromAndTo_AppliesBothConditions()
+    {
+        // Arrange
+        await SeedFilterCombinationEventsAsync();
+        var from = new DateTime(2025, 1, 11, 0, 0, 0);
+        var to = new DateTime(2025, 1, 13, 0, 0, 0);
+
+        // Act
+        var result = await Events.GetPageAsync(new EventFilter(null, from, to), 1, 10);
+
+        // Assert
+        var item = Assert.Single(result.Items);
+        Assert.Equal("team retro", item.Title);
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Team Offsite");
+    }
+
+    [Fact]
+    public async Task GetPageAsync_FilterByTitleAndTo_AppliesBothConditions()
+    {
+        // Arrange
+        await SeedFilterCombinationEventsAsync();
+        var to = new DateTime(2025, 1, 12, 12, 0, 0);
+
+        // Act
+        var result = await Events.GetPageAsync(new EventFilter("team", null, to), 1, 10);
+
+        // Assert
+        Assert.Equal(2, result.TotalCount);
+        Assert.Equal(
+            new[] { "Team Meeting", "team retro" },
+            result.Items.Select(evt => evt.Title));
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Team Offsite");
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Conference");
+    }
+
+    [Fact]
+    public async Task GetPageAsync_FilterByTitleFromAndTo_AppliesAllConditions()
+    {
+        // Arrange
+        await SeedFilterCombinationEventsAsync();
+        var from = new DateTime(2025, 1, 11, 0, 0, 0);
+        var to = new DateTime(2025, 1, 13, 0, 0, 0);
+
+        // Act
+        var result = await Events.GetPageAsync(new EventFilter("team", from, to), 1, 10);
+
+        // Assert
+        var item = Assert.Single(result.Items);
+        Assert.Equal("team retro", item.Title);
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Team Offsite");
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Team Meeting");
+        Assert.DoesNotContain(result.Items, evt => evt.Title == "Conference");
     }
 
     [Fact]
@@ -327,6 +382,12 @@ public sealed class EventRepositoryTests : RepositoryTestBase
         await AddEventAsync("Team Meeting", new DateTime(2025, 1, 10, 10, 0, 0));
         await AddEventAsync("team retro", new DateTime(2025, 1, 12, 10, 0, 0));
         await AddEventAsync("Conference", new DateTime(2025, 1, 15, 9, 0, 0));
+    }
+
+    private async Task SeedFilterCombinationEventsAsync()
+    {
+        await SeedSampleEventsAsync();
+        await AddEventAsync("Team Offsite", new DateTime(2025, 1, 14, 10, 0, 0));
     }
 
     private async Task SeedFiveEventsAsync()
