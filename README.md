@@ -1,6 +1,6 @@
 # Middle C# — Events & Bookings API
 
-Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней. Пятый спринт заменил хранение данных в памяти на PostgreSQL через Entity Framework Core.
+Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней. Пятый спринт заменил хранение данных в памяти на PostgreSQL через Entity Framework Core. Шестой спринт перевёл схему базы данных на миграции EF Core, выделил репозитории и добавил интеграционные тесты с PostgreSQL в Testcontainers.
 
 ## Требования
 
@@ -33,12 +33,28 @@ docker compose ps
 
 Для другого окружения строку можно переопределить переменной окружения `ConnectionStrings__DefaultConnection` или через user secrets. Локальные логин и пароль `postgres/postgres` предназначены только для учебного запуска.
 
-При первом запуске приложение создаёт базу `eventapi` и таблицы через `EnsureCreated()`. Если схема менялась, проще пересоздать контейнер и volume:
+Контейнер PostgreSQL создаёт базу `eventapi`, а при первом запуске приложение применяет к ней миграции EF Core. Схема управляется миграциями, а не `EnsureCreated()`. Если база была создана в пятом спринте через `EnsureCreated()`, её нужно один раз пересоздать — иначе `Migrate()` не найдёт историю миграций:
 
 ```bash
 docker compose down -v
 docker compose up -d
 ```
+
+Проверить применённые миграции можно по таблице `__EFMigrationsHistory`:
+
+```bash
+docker compose exec postgres psql -U postgres -d eventapi -c 'TABLE "__EFMigrationsHistory";'
+```
+
+Команды для работы с миграциями:
+
+```bash
+dotnet tool restore
+dotnet ef migrations add <Name> --project src/MiddleCsharp --startup-project src/MiddleCsharp
+dotnet ef database update --project src/MiddleCsharp --startup-project src/MiddleCsharp
+```
+
+`dotnet tool restore` нужен один раз после клонирования: версия `dotnet-ef` зафиксирована в `.config/dotnet-tools.json`. Обычно `dotnet ef database update` вручную не требуется — приложение применяет миграции при старте.
 
 По умолчанию запускается http-профиль, приложение слушает:
 
@@ -63,10 +79,14 @@ dotnet dev-certs https --trust
 
 ```bash
 dotnet build          # собирает решение целиком (API + тесты)
-dotnet test           # запускает юнит-тесты сервисов, middleware и фоновой обработки
+dotnet test           # запускает юнит- и интеграционные тесты
 ```
 
-Тесты используют EF Core InMemory и не требуют запущенного PostgreSQL или Docker.
+Юнит-тесты используют EF Core InMemory и не требуют Docker. Интеграционные тесты поднимают PostgreSQL в Testcontainers, поэтому для команды `dotnet test` Docker должен быть запущен. Только юнит-тесты можно запустить отдельно:
+
+```bash
+dotnet test tests/MiddleCsharp.Tests/MiddleCsharp.Tests.csproj
+```
 
 ## API
 
@@ -233,7 +253,7 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 `BookingProcessingService` — реализация `BackgroundService`, зарегистрированная через `AddHostedService`. `BackgroundService` — синглтон, а `AppDbContext` — scoped, поэтому сервис получает `IServiceScopeFactory` и не зависит от scoped-сервисов напрямую. Сервис:
 
 - раз в секунду опрашивает базу на наличие броней в статусе `Pending` (`BookingProcessing:PollingInterval`, по умолчанию 1 секунда);
-- в коротком scope получает `AppDbContext`, извлекает id `Pending`-броней и закрывает scope;
+- в коротком scope получает `IBookingRepository`, извлекает id `Pending`-броней и закрывает scope;
 - обрабатывает брони **параллельно**: для каждой запускается отдельная задача, результаты собираются через `Task.WhenAll`;
 - для каждой брони выдерживает искусственную задержку 2 секунды (`BookingProcessing:ProcessingDelay`) — имитация обращения к внешней системе. Задержка выполняется параллельно для всей пачки;
 - после задержки создаёт **отдельный scope** на каждую бронь, получает из него scoped `BookingProcessor` с собственным `DbContext` и переводит бронь в `Confirmed` с заполнением `ProcessedAt`;
@@ -257,12 +277,12 @@ curl http://localhost:5027/bookings/c1c9b2d4-1f3a-4b6e-9c2a-7d1e5f0a8b11
 
 `BookingService` — scoped-сервис, но все его экземпляры в процессе используют один общий `static SemaphoreSlim(1, 1)`. Внутри критической секции:
 
-1. из `_context.Events` загружается событие;
+1. через `IEventRepository.GetByIdForUpdateAsync` загружается событие;
 2. проверяются свободные места и вызывается `TryReserveSeats`;
-3. создаётся бронь и добавляется в `_context.Bookings`;
-4. один `SaveChangesAsync` сохраняет и новую бронь, и уменьшенный `AvailableSeats` в одной транзакции.
+3. создаётся бронь и добавляется через `IBookingRepository.AddAsync`;
+4. один `IUnitOfWork.SaveChangesAsync` сохраняет и новую бронь, и уменьшенный `AvailableSeats` в одной транзакции.
 
-Если мест нет, `TryReserveSeats` возвращает `false`, и сервис выбрасывает `NoAvailableSeatsException`, которую `ExceptionHandlingMiddleware` превращает в `409 Conflict`. Чтение брони (`GET /bookings/{id}`) не блокируется. Если `SaveChangesAsync` завершился ошибкой, транзакция откатывается, трекер изменений очищается, и место не остаётся занятым.
+Если мест нет, `TryReserveSeats` возвращает `false`, и сервис выбрасывает `NoAvailableSeatsException`, которую `ExceptionHandlingMiddleware` превращает в `409 Conflict`. Чтение брони (`GET /bookings/{id}`) не блокируется. Если `SaveChangesAsync` завершился ошибкой, изменения очищаются через `IUnitOfWork.ClearChanges`, и место не остаётся занятым.
 
 Тот же семафор используется при возврате места в `BookingProcessor`, если бронь отклонена из-за ошибки обработки. Это защищает пару «прочитать свободные места → изменить их» от lost update в рамках одного процесса.
 
@@ -398,9 +418,21 @@ curl -X POST http://localhost:5027/events \
 
 - `AppDbContext` содержит `DbSet<Event> Events` и `DbSet<Booking> Bookings`, конфигурации подключаются через `ApplyConfigurationsFromAssembly`.
 - Маппинг описан в `DataAccess/Configurations` через `IEntityTypeConfiguration<T>` (Fluent API): имена таблиц `events`/`bookings`, первичные ключи с `ValueGeneratedNever()`, обязательность и максимальные длины строк, `Status` как строка, внешний ключ `bookings.EventId → events.Id` с каскадным удалением, индексы по `events.StartAt` и `bookings.Status, CreatedAt`.
-- `AppDbContext` — scoped. `EventService` и `BookingService` тоже scoped и работают с `_context.Events`/`_context.Bookings` напрямую.
-- Схема создаётся при старте через `EnsureCreated()`: база и таблицы создаются, если их ещё нет. Повторный запуск ничего не ломает. Миграции в этом спринте не используются; `EnsureCreated` с ними не совместим, поэтому при переходе на миграции БД нужно пересоздать. При изменении модели проще пересоздать volume.
+- `AppDbContext` — scoped. `EventService` и `BookingService` тоже scoped, но работают с данными только через репозитории.
+- Схема управляется миграциями EF Core. При старте приложение выполняет `Database.MigrateAsync()`; файлы миграций лежат в `src/MiddleCsharp/Migrations`. `EnsureCreated()` больше не используется. Проверка `EF.IsDesignTime` не даёт инструментам `dotnet ef` подключаться к базе при генерации миграций.
+- Миграция `InitialCreate` создаёт таблицы `events` и `bookings` и внешний ключ `bookings.EventId → events.Id` с `ON DELETE CASCADE`. Повторный запуск применяет только новые миграции; история хранится в `__EFMigrationsHistory`.
 - Данные сохраняются после перезапуска приложения. Контейнер и volume можно остановить через `docker compose down` (данные сохранятся) или удалить через `docker compose down -v`.
+- Старую базу, созданную в пятом спринте через `EnsureCreated()`, нужно один раз пересоздать: у неё нет истории миграций.
+
+## Репозитории и Unit of Work
+
+Работа с `AppDbContext` инкапсулирована в слое `DataAccess/Repositories`:
+
+- `IEventRepository` / `EventRepository` — чтение события, чтение для изменения, постраничный список с фильтрами, добавление и удаление;
+- `IBookingRepository` / `BookingRepository` — чтение брони, загрузка для фоновой обработки вместе с событием, список `Pending`-id, добавление;
+- `IUnitOfWork` / `UnitOfWork` — единая точка сохранения изменений и очистки трекера.
+
+Репозитории и `IUnitOfWork` зарегистрированы как `Scoped` и используют общий scoped `AppDbContext`. В `BookingService` это позволяет одним `SaveChangesAsync` атомарно сохранить новую бронь и уменьшенный `AvailableSeats`. В `BookingProcessingService` репозиторий получается из отдельного scope через `IServiceScopeFactory`; `BookingProcessor` не обращается к `AppDbContext` напрямую. Сервисы по-прежнему отвечают за бизнес-правила и валидацию, а репозитории — только за доступ к данным.
 
 Проверить таблицы можно так:
 
@@ -413,23 +445,47 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select \"Id\", \"T
 
 | Требование | Реализация в проекте |
 |---|---|
-| PostgreSQL вместо памяти | `docker-compose.yml`, `UseNpgsql`, `EnsureCreated` |
+| PostgreSQL вместо памяти | `docker-compose.yml`, `UseNpgsql`; с шестого спринта схема — через миграции |
 | EF Core | пакеты `Microsoft.EntityFrameworkCore` и `Npgsql.EntityFrameworkCore.PostgreSQL` |
 | `AppDbContext` и `DbSet` | `DataAccess/AppDbContext.cs` |
 | Fluent API | `DataAccess/Configurations/EventConfiguration.cs`, `BookingConfiguration.cs` |
 | Приватные конструкторы и навигации | `Event`/`Booking` с приватными конструкторами без параметров, `Event.Bookings`, `Booking.Event` |
-| Сервисы работают с `AppDbContext` | `EventService`, `BookingService`; async-методы и `SaveChangesAsync` |
+| Сервисы работают через слой данных | В пятом спринте — напрямую с `AppDbContext`; с шестого — через репозитории и `IUnitOfWork` |
 | Scoped-регистрации | `AddDbContext`, scoped `IEventService`/`IBookingService`/`BookingProcessor` |
 | Фоновая обработка со scopes | `BookingProcessingService` + `IServiceScopeFactory`: отдельный scope на выборку id и на каждую бронь |
 | Тесты | EF Core InMemory, уникальная база на тест, scope на конкурентный запрос |
 
 `BookingProcessor` в проекте — scoped-обработчик одной брони; пачку и scopes координирует `BookingProcessingService`. В задании фоновый сервис назван `BookingBackgroundService` — эта роль у `BookingProcessingService`.
 
+## Соответствие заданию шестого спринта
+
+| Требование | Реализация в проекте |
+|---|---|
+| C# / .NET 8+, ASP.NET Core Web API | `net10.0`, ASP.NET Core Web API |
+| Сборка и запуск | `dotnet build`, `dotnet run --project src/MiddleCsharp` |
+| Тесты | `dotnet test`: 112 юнит-тестов и 31 интеграционный |
+| Swagger | Swagger UI и `swagger.json` доступны в Development |
+| EF Core + PostgreSQL | `Microsoft.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL`, `docker-compose.yml` |
+| Схема через миграции | `src/MiddleCsharp/Migrations`, `Database.MigrateAsync()` при старте; `EnsureCreated()` удалён |
+| Начальная миграция | `InitialCreate`: таблицы `events`/`bookings`, FK с `ON DELETE CASCADE`, индексы |
+| Репозитории Event и Booking | `DataAccess/Repositories/IEventRepository`, `EventRepository`, `IBookingRepository`, `BookingRepository` |
+| Сервисы не работают с `AppDbContext` | `EventService`, `BookingService`, `BookingProcessor` используют репозитории и `IUnitOfWork` |
+| Scoped-регистрации | `AddDbContext`, репозитории, `IUnitOfWork`, сервисы и `BookingProcessor` — scoped |
+| Фоновая обработка со scopes | `BookingProcessingService` получает `IBookingRepository` из scope через `IServiceScopeFactory` |
+| Интеграционные тесты на реальной PostgreSQL | `tests/MiddleCsharp.IntegrationTests`, Testcontainers, образ `postgres:17-alpine` |
+| Изоляция тестов | один контейнер на коллекцию, перед каждым тестом `EnsureDeleted()` + `Migrate()` |
+| Нет захардкоженного порта | connection string берётся из `PostgreSqlContainer` |
+
 ## Тесты
 
-Отдельный проект `tests/MiddleCsharp.Tests` на xUnit, ссылается на `src/MiddleCsharp`. Покрыто:
+Отдельные проекты на xUnit, оба ссылаются на `src/MiddleCsharp`:
 
-- CRUD через `AppDbContext`: создание, чтение списка и по id, обновление, удаление; проверка, что чтение через `AsNoTracking` не оставляет сущности в трекере;
+- `tests/MiddleCsharp.Tests` — быстрые юнит-тесты на EF Core InMemory;
+- `tests/MiddleCsharp.IntegrationTests` — интеграционные тесты репозиториев на реальной PostgreSQL через Testcontainers.
+
+Юнит-тестами покрыто:
+
+- CRUD через сервисы и репозитории: создание, чтение списка и по id, обновление, удаление; проверка, что чтение не оставляет сущности в трекере;
 - неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`, слишком длинные `Title`/`Description`;
 - валидация DTO: обязательность дат и `TotalSeats`, `EndAt <= StartAt`, `StringLength`, валидный запрос;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
@@ -444,9 +500,18 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select \"Id\", \"T
 - `BookingProcessor`: подтверждение `Pending`-броней, заполнение `ProcessedAt`, пропуск уже обработанных и отсутствующих броней, отказ и возврат места при ошибке подтверждения (через `SaveChangesInterceptor`), сохранение места при успешном подтверждении, отмена по `CancellationToken`;
 - `BookingProcessingService`: пакетная обработка, параллельный запуск задержек (детерминированный счётчик одновременных задержек через `TimeProvider`, без измерения wall-clock), запуск опроса и корректная остановка по `CancellationToken`.
 
-Всего 112 тестов.
+Интеграционными тестами покрыто:
 
-Тесты написаны по принципу AAA (Arrange-Act-Assert). Каждый тест получает `TestApplication` с уникальной InMemory-базой, поэтому тесты не влияют друг на друга. Конкурентные тесты создают отдельный scope и отдельный `AppDbContext` на каждый параллельный запрос. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик.
+- миграция `InitialCreate` применяется, таблицы и история миграций создаются;
+- `EventRepository`: добавление, чтение, чтение для изменения, удаление, каскадное удаление броней, фильтры `title`/`from`/`to` и их комбинации, границы включительно, пагинация и сортировка;
+- `BookingRepository`: добавление, чтение, выборка `Pending`-id с порядком, загрузка с событием, подтверждение, отклонение с возвратом места, нарушение внешнего ключа;
+- каскадное удаление на уровне схемы PostgreSQL проверяется отдельным тестом.
+
+Всего 143 теста: 112 юнит-тестов и 31 интеграционный.
+
+Юнит-тесты написаны по принципу AAA (Arrange-Act-Assert). Каждый тест получает `TestApplication` с уникальной InMemory-базой, поэтому тесты не влияют друг на друга. Конкурентные тесты создают отдельный scope и отдельный `AppDbContext` на каждый параллельный запрос. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик.
+
+Интеграционные тесты используют один контейнер `postgres:17-alpine` на всю коллекцию. Перед каждым тестом база приводится к чистому состоянию через `EnsureDeleted()` и `Migrate()`, поэтому тесты не зависят от порядка запуска. Connection string и порт берутся из контейнера Testcontainers. Для запуска нужен Docker; контейнер поднимается автоматически.
 
 ```bash
 dotnet test
@@ -456,6 +521,8 @@ dotnet test
 
 ```
 middle-csharp/
+├── .config/
+│   └── dotnet-tools.json
 ├── docker-compose.yml
 ├── src/
 │   └── MiddleCsharp/
@@ -468,9 +535,16 @@ middle-csharp/
 │       │   └── EventsController.cs
 │       ├── DataAccess/
 │       │   ├── AppDbContext.cs
-│       │   └── Configurations/
-│       │       ├── BookingConfiguration.cs
-│       │       └── EventConfiguration.cs
+│       │   ├── Configurations/
+│       │   │   ├── BookingConfiguration.cs
+│       │   │   └── EventConfiguration.cs
+│       │   ├── IUnitOfWork.cs
+│       │   ├── Repositories/
+│       │   │   ├── BookingRepository.cs
+│       │   │   ├── EventRepository.cs
+│       │   │   ├── IBookingRepository.cs
+│       │   │   └── IEventRepository.cs
+│       │   └── UnitOfWork.cs
 │       ├── DTOs/
 │       │   ├── BookingInfo.cs
 │       │   ├── BookingMappingExtensions.cs
@@ -491,6 +565,10 @@ middle-csharp/
 │       │   └── ProblemDetailsContentTypeFilter.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
+│       ├── Migrations/
+│       │   ├── 20261123140857_InitialCreate.cs
+│       │   ├── 20261123140857_InitialCreate.Designer.cs
+│       │   └── AppDbContextModelSnapshot.cs
 │       ├── Models/
 │       │   ├── Booking.cs
 │       │   ├── BookingStatus.cs
@@ -507,6 +585,14 @@ middle-csharp/
 │       ├── Program.cs
 │       └── middle-csharp.csproj
 ├── tests/
+│   ├── MiddleCsharp.IntegrationTests/
+│   │   ├── BookingRepositoryTests.cs
+│   │   ├── EventRepositoryTests.cs
+│   │   ├── MigrationTests.cs
+│   │   ├── PostgresCollection.cs
+│   │   ├── PostgresFixture.cs
+│   │   ├── RepositoryTestBase.cs
+│   │   └── MiddleCsharp.IntegrationTests.csproj
 │   └── MiddleCsharp.Tests/
 │       ├── BackgroundServices/
 │       │   ├── BookingProcessingServiceTests.cs
