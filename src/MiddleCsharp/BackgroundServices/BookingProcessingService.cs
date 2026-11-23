@@ -1,7 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.Models;
+using MiddleCsharp.DataAccess.Repositories;
 
 namespace MiddleCsharp.BackgroundServices;
 
@@ -65,15 +63,9 @@ public sealed class BookingProcessingService : BackgroundService
 
         await using (var scope = _scopeFactory.CreateAsyncScope())
         {
-            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var bookings = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
 
-            pendingIds = await context.Bookings
-                .AsNoTracking()
-                .Where(booking => booking.Status == BookingStatus.Pending)
-                .OrderBy(booking => booking.CreatedAt)
-                .ThenBy(booking => booking.Id)
-                .Select(booking => booking.Id)
-                .ToListAsync(cancellationToken);
+            pendingIds = (await bookings.GetPendingIdsAsync(cancellationToken)).ToList();
         }
 
         if (pendingIds.Count == 0)

@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DataAccess.Repositories;
 using MiddleCsharp.DTOs;
 using MiddleCsharp.Exceptions;
 using MiddleCsharp.Models;
@@ -8,18 +8,18 @@ namespace MiddleCsharp.Services;
 
 internal sealed class EventService : IEventService
 {
-    private readonly AppDbContext _context;
+    private readonly IEventRepository _events;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public EventService(AppDbContext context)
+    public EventService(IEventRepository events, IUnitOfWork unitOfWork)
     {
-        _context = context;
+        _events = events;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<Event> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var evt = await _context.Events
-            .AsNoTracking()
-            .SingleOrDefaultAsync(stored => stored.Id == id, cancellationToken);
+        var evt = await _events.GetByIdAsync(id, cancellationToken);
 
         return evt ?? throw new EventNotFoundException(id);
     }
@@ -45,46 +45,7 @@ internal sealed class EventService : IEventService
             throw new EventValidationException("From must be earlier than or equal to To.");
         }
 
-        IQueryable<Event> query = _context.Events.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(filter.Title))
-        {
-            var title = filter.Title.Trim().ToLower();
-            query = query.Where(evt => evt.Title.ToLower().Contains(title));
-        }
-
-        if (filter.From.HasValue)
-        {
-            var from = Event.NormalizeToUnspecified(filter.From.Value);
-            query = query.Where(evt => evt.StartAt >= from);
-        }
-
-        if (filter.To.HasValue)
-        {
-            var to = Event.NormalizeToUnspecified(filter.To.Value);
-            query = query.Where(evt => evt.EndAt <= to);
-        }
-
-        var totalCount = await query.CountAsync(cancellationToken);
-        var skip = ((long)page - 1) * pageSize;
-
-        var items = skip >= totalCount
-            ? new List<Event>()
-            : await query
-                .OrderBy(evt => evt.StartAt)
-                .ThenBy(evt => evt.Id)
-                .Skip((int)skip)
-                .Take(pageSize)
-                .ToListAsync(cancellationToken);
-
-        return new PaginatedResult<Event>
-        {
-            TotalCount = totalCount,
-            Page = page,
-            PageSize = pageSize,
-            TotalPages = (int)Math.Ceiling(totalCount / (double)pageSize),
-            Items = items
-        };
+        return await _events.GetPageAsync(filter, page, pageSize, cancellationToken);
     }
 
     public async Task<Event> CreateAsync(Event newEvent, CancellationToken cancellationToken = default)
@@ -96,8 +57,8 @@ internal sealed class EventService : IEventService
             throw new EventValidationException("TotalSeats must be greater than 0.");
         }
 
-        _context.Events.Add(newEvent);
-        await _context.SaveChangesAsync(cancellationToken);
+        await _events.AddAsync(newEvent, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return newEvent;
     }
@@ -109,7 +70,7 @@ internal sealed class EventService : IEventService
     {
         Validate(updatedEvent);
 
-        var stored = await _context.Events.SingleOrDefaultAsync(evt => evt.Id == id, cancellationToken)
+        var stored = await _events.GetByIdForUpdateAsync(id, cancellationToken)
             ?? throw new EventNotFoundException(id);
 
         stored.UpdateDetails(
@@ -118,7 +79,7 @@ internal sealed class EventService : IEventService
             updatedEvent.StartAt,
             updatedEvent.EndAt);
 
-        await _context.SaveChangesAsync(cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
@@ -127,13 +88,12 @@ internal sealed class EventService : IEventService
 
         try
         {
-            var stored = await _context.Events
-                .Include(evt => evt.Bookings)
-                .SingleOrDefaultAsync(evt => evt.Id == id, cancellationToken)
-                ?? throw new EventNotFoundException(id);
+            if (!await _events.RemoveAsync(id, cancellationToken))
+            {
+                throw new EventNotFoundException(id);
+            }
 
-            _context.Events.Remove(stored);
-            await _context.SaveChangesAsync(cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
         finally
         {

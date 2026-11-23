@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DataAccess.Repositories;
 using MiddleCsharp.DTOs;
 using MiddleCsharp.Exceptions;
 using MiddleCsharp.Models;
@@ -8,12 +8,20 @@ namespace MiddleCsharp.Services;
 
 internal sealed class BookingService : IBookingService
 {
-    private readonly AppDbContext _context;
+    private readonly IEventRepository _events;
+    private readonly IBookingRepository _bookings;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly TimeProvider _timeProvider;
 
-    public BookingService(AppDbContext context, TimeProvider timeProvider)
+    public BookingService(
+        IEventRepository events,
+        IBookingRepository bookings,
+        IUnitOfWork unitOfWork,
+        TimeProvider timeProvider)
     {
-        _context = context;
+        _events = events;
+        _bookings = bookings;
+        _unitOfWork = unitOfWork;
         _timeProvider = timeProvider;
     }
 
@@ -27,8 +35,7 @@ internal sealed class BookingService : IBookingService
 
         try
         {
-            var evt = await _context.Events
-                .SingleOrDefaultAsync(stored => stored.Id == eventId, cancellationToken)
+            var evt = await _events.GetByIdForUpdateAsync(eventId, cancellationToken)
                 ?? throw new EventNotFoundException(eventId);
 
             if (!evt.TryReserveSeats())
@@ -38,12 +45,12 @@ internal sealed class BookingService : IBookingService
 
             booking = Booking.CreatePending(eventId, _timeProvider.GetUtcNow().UtcDateTime);
 
-            _context.Bookings.Add(booking);
-            await _context.SaveChangesAsync(cancellationToken);
+            await _bookings.AddAsync(booking, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
         catch
         {
-            _context.ChangeTracker.Clear();
+            _unitOfWork.ClearChanges();
             throw;
         }
         finally
@@ -58,9 +65,7 @@ internal sealed class BookingService : IBookingService
         Guid bookingId,
         CancellationToken cancellationToken = default)
     {
-        var booking = await _context.Bookings
-            .AsNoTracking()
-            .SingleOrDefaultAsync(stored => stored.Id == bookingId, cancellationToken);
+        var booking = await _bookings.GetByIdAsync(bookingId, cancellationToken);
 
         return booking?.ToInfo() ?? throw new BookingNotFoundException(bookingId);
     }

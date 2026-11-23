@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DataAccess.Repositories;
 using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests;
@@ -24,6 +25,9 @@ internal sealed class TestApplication : IDisposable
             options.UseInMemoryDatabase(databaseName);
             configureDb?.Invoke(options);
         });
+        services.AddScoped<IEventRepository, EventRepository>();
+        services.AddScoped<IBookingRepository, BookingRepository>();
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<BookingProcessor>();
