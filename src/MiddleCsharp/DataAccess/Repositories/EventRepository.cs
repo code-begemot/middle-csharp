@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.DTOs;
 using MiddleCsharp.Models;
-using MiddleCsharp.Services;
 
 namespace MiddleCsharp.DataAccess.Repositories;
 

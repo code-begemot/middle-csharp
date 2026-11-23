@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
+using MiddleCsharp.Models;
 using MiddleCsharp.Services;
 
 namespace MiddleCsharp.DTOs;
