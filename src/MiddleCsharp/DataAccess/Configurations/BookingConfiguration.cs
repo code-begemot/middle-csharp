@@ -11,20 +11,27 @@ internal sealed class BookingConfiguration : IEntityTypeConfiguration<Booking>
         builder.ToTable("bookings");
 
         builder.HasKey(booking => booking.Id);
-        builder.Property(booking => booking.Id).ValueGeneratedNever();
+        builder.Property(booking => booking.Id)
+            .HasColumnName("id")
+            .ValueGeneratedNever();
 
-        builder.Property(booking => booking.EventId).IsRequired();
+        builder.Property(booking => booking.EventId)
+            .HasColumnName("event_id")
+            .IsRequired();
 
         builder.Property(booking => booking.Status)
+            .HasColumnName("status")
             .IsRequired()
             .HasConversion<string>()
             .HasMaxLength(20);
 
         builder.Property(booking => booking.CreatedAt)
+            .HasColumnName("created_at")
             .IsRequired()
             .HasColumnType("timestamp with time zone");
 
         builder.Property(booking => booking.ProcessedAt)
+            .HasColumnName("processed_at")
             .HasColumnType("timestamp with time zone");
 
         builder.HasIndex(booking => new { booking.Status, booking.CreatedAt });
