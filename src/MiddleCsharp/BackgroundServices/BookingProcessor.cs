@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DataAccess.Repositories;
 using MiddleCsharp.Models;
 using MiddleCsharp.Services;
 
@@ -7,16 +7,19 @@ namespace MiddleCsharp.BackgroundServices;
 
 internal sealed class BookingProcessor
 {
-    private readonly AppDbContext _context;
+    private readonly IBookingRepository _bookings;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<BookingProcessor> _logger;
 
     public BookingProcessor(
-        AppDbContext context,
+        IBookingRepository bookings,
+        IUnitOfWork unitOfWork,
         TimeProvider timeProvider,
         ILogger<BookingProcessor> logger)
     {
-        _context = context;
+        _bookings = bookings;
+        _unitOfWork = unitOfWork;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -25,8 +28,7 @@ internal sealed class BookingProcessor
     {
         try
         {
-            var booking = await _context.Bookings
-                .SingleOrDefaultAsync(stored => stored.Id == bookingId, cancellationToken);
+            var booking = await _bookings.GetByIdForUpdateAsync(bookingId, cancellationToken);
 
             if (booking is null || booking.Status != BookingStatus.Pending)
             {
@@ -39,7 +41,7 @@ internal sealed class BookingProcessor
 
             var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
             booking.Confirm(processedAt);
-            await _context.SaveChangesAsync(cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             _logger.LogInformation(
                 "Booking {BookingId} for event {EventId} confirmed at {ProcessedAt}",
@@ -70,11 +72,9 @@ internal sealed class BookingProcessor
 
             try
             {
-                _context.ChangeTracker.Clear();
+                _unitOfWork.ClearChanges();
 
-                var booking = await _context.Bookings
-                    .Include(stored => stored.Event)
-                    .SingleOrDefaultAsync(stored => stored.Id == bookingId, cancellationToken);
+                var booking = await _bookings.GetForProcessingAsync(bookingId, cancellationToken);
 
                 if (booking is null || booking.Status != BookingStatus.Pending)
                 {
@@ -84,7 +84,7 @@ internal sealed class BookingProcessor
                 var processedAt = _timeProvider.GetUtcNow().UtcDateTime;
                 booking.Reject(processedAt);
                 booking.Event?.ReleaseSeats();
-                await _context.SaveChangesAsync(cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
 
                 _logger.LogWarning(
                     "Booking {BookingId} rejected at {ProcessedAt} after processing error",

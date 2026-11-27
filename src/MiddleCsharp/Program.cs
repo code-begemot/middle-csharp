@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MiddleCsharp.BackgroundServices;
 using MiddleCsharp.DataAccess;
+using MiddleCsharp.DataAccess.Repositories;
 using MiddleCsharp.Filters;
 using MiddleCsharp.Middleware;
 using MiddleCsharp.Services;
@@ -56,6 +57,9 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<AppDbContext>(
     options => options.UseNpgsql(connectionString));
 
+builder.Services.AddScoped<IEventRepository, EventRepository>();
+builder.Services.AddScoped<IBookingRepository, BookingRepository>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
 builder.Services.AddScoped<BookingProcessor>();
@@ -74,10 +78,11 @@ builder.Services.AddHostedService<BookingProcessingService>();
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+if (!EF.IsDesignTime)
 {
+    await using var scope = app.Services.CreateAsyncScope();
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    context.Database.EnsureCreated();
+    await context.Database.MigrateAsync();
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();

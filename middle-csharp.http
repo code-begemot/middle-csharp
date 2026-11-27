@@ -16,7 +16,11 @@ GET {{middle_csharp_HostAddress}}/events?from=2025-01-01T00:00:00&to=2025-12-31T
 Accept: application/json
 
 ### Комбинированная фильтрация + пагинация
-GET {{middle_csharp_HostAddress}}/events?title=team&from=2025-01-01T00:00:00&page=2&pageSize=5
+GET {{middle_csharp_HostAddress}}/events?title=team&from=2025-01-01T00:00:00&to=2025-12-31T23:59:59&page=2&pageSize=5
+Accept: application/json
+
+### Фильтр по названию и верхней границе дат
+GET {{middle_csharp_HostAddress}}/events?title=team&to=2025-01-12T11:00:00
 Accept: application/json
 
 ### Невалидная пагинация: 400 Bad Request

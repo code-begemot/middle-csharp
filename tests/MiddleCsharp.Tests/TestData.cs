@@ -1,5 +1,4 @@
 using MiddleCsharp.Models;
-using MiddleCsharp.Services;
 
 namespace MiddleCsharp.Tests;
 
