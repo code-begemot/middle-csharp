@@ -1,6 +1,6 @@
 # Middle C# — Events & Bookings API
 
-Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней. Пятый спринт заменил хранение данных в памяти на PostgreSQL через Entity Framework Core. Шестой спринт перевёл схему базы данных на миграции EF Core, выделил репозитории и добавил интеграционные тесты с PostgreSQL в Testcontainers.
+Учебный проект: REST API для управления событиями и бронированиями на ASP.NET Core (.NET 10). Второй спринт добавил фильтрацию и пагинацию событий, глобальную обработку ошибок и юнит-тесты. Третий спринт добавил бронирования с фоновой обработкой заявок. Четвёртый спринт добавил ограничение мест на событии, защиту от овербукинга и параллельную обработку броней. Пятый спринт заменил хранение данных в памяти на PostgreSQL через Entity Framework Core. Шестой спринт перевёл схему базы данных на миграции EF Core, выделил репозитории и добавил интеграционные тесты с PostgreSQL в Testcontainers. Седьмой спринт разбил решение на четыре слоя по принципам чистой архитектуры: Domain, Application, Infrastructure и Presentation.
 
 ## Требования
 
@@ -14,7 +14,7 @@
 git clone https://github.com/code-begemot/middle-csharp.git
 cd middle-csharp
 docker compose up -d
-dotnet run --project src/MiddleCsharp
+dotnet run --project src/MiddleCsharp.Presentation
 ```
 
 Перед запуском приложения PostgreSQL должен быть готов принимать подключения. `docker compose up -d` поднимает контейнер `middle-csharp-postgres` с healthcheck; проверить состояние можно командой:
@@ -23,7 +23,7 @@ dotnet run --project src/MiddleCsharp
 docker compose ps
 ```
 
-Строка подключения по умолчанию находится в `src/MiddleCsharp/appsettings.json`:
+Строка подключения по умолчанию находится в `src/MiddleCsharp.Presentation/appsettings.json`:
 
 ```json
 "ConnectionStrings": {
@@ -50,11 +50,11 @@ docker compose exec postgres psql -U postgres -d eventapi -c 'TABLE "__EFMigrati
 
 ```bash
 dotnet tool restore
-dotnet ef migrations add <Name> --project src/MiddleCsharp --startup-project src/MiddleCsharp
-dotnet ef database update --project src/MiddleCsharp --startup-project src/MiddleCsharp
+dotnet ef migrations add <Name> --project src/MiddleCsharp.Infrastructure --startup-project src/MiddleCsharp.Presentation
+dotnet ef database update --project src/MiddleCsharp.Infrastructure --startup-project src/MiddleCsharp.Presentation
 ```
 
-`dotnet tool restore` нужен один раз после клонирования: версия `dotnet-ef` зафиксирована в `.config/dotnet-tools.json`. Обычно `dotnet ef database update` вручную не требуется — приложение применяет миграции при старте.
+`dotnet tool restore` нужен один раз после клонирования: версия `dotnet-ef` зафиксирована в `.config/dotnet-tools.json`. Миграции лежат в проекте `MiddleCsharp.Infrastructure`, а запускаемым проектом для инструментов остаётся веб-проект: он знает строку подключения и параметры хоста. Обычно `dotnet ef database update` вручную не требуется — приложение применяет миграции при старте.
 
 По умолчанию запускается http-профиль, приложение слушает:
 
@@ -64,7 +64,7 @@ dotnet ef database update --project src/MiddleCsharp --startup-project src/Middl
 Опционально можно запустить https-профиль:
 
 ```bash
-dotnet run --project src/MiddleCsharp --launch-profile https
+dotnet run --project src/MiddleCsharp.Presentation --launch-profile https
 ```
 
 Тогда приложение также слушает `https://localhost:7054`. При первом запуске https-профиля может понадобиться доверить dev-сертификат:
@@ -82,11 +82,31 @@ dotnet build          # собирает решение целиком (API + т
 dotnet test           # запускает юнит- и интеграционные тесты
 ```
 
-Юнит-тесты используют EF Core InMemory и не требуют Docker. Интеграционные тесты поднимают PostgreSQL в Testcontainers, поэтому для команды `dotnet test` Docker должен быть запущен. Только юнит-тесты можно запустить отдельно:
+Юнит-тесты используют EF Core InMemory и не требуют Docker. Интеграционные тесты поднимают PostgreSQL в Testcontainers, поэтому для команды `dotnet test` Docker должен быть запущен. Только быстрые тесты можно запустить отдельно:
 
 ```bash
 dotnet test tests/MiddleCsharp.Tests/MiddleCsharp.Tests.csproj
+dotnet test tests/MiddleCsharp.Presentation.Tests/MiddleCsharp.Presentation.Tests.csproj
 ```
+
+## Слои приложения
+
+Решение разбито на четыре сборки; зависимости направлены только «внутрь» и проверяются компилятором через `ProjectReference`:
+
+| Слой | Назначение | Зависит от |
+|---|---|---|
+| `MiddleCsharp.Domain` | доменные сущности `Event`/`Booking`, перечисление `BookingStatus`, `EventConstraints`, доменные исключения | ни от чего |
+| `MiddleCsharp.Application` | use cases (`EventService`, `BookingService`), порты (`IEventRepository`, `IBookingRepository`, `IUnitOfWork`), DTO, фоновая обработка | только `Domain` |
+| `MiddleCsharp.Infrastructure` | адаптеры портов: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции | `Application`, `Domain` |
+| `MiddleCsharp.Presentation` | контроллеры, HTTP-маппинг (`GetEventsQuery`), middleware ошибок, фильтр Problem Details, composition root | `Application`, `Infrastructure` |
+
+Правила направления зависимостей:
+
+- `Application` не ссылается на `Infrastructure`: бизнес-логика знает только интерфейсы портов. Обратная ссылка дала бы цикл проектов, поэтому нарушение ловится на сборке.
+- `Domain` не содержит ни одного пакета и не импортирует ASP.NET Core, EF Core, логирование и JSON-атрибуты. Проверяется пустым списком `PackageReference` в `MiddleCsharp.Domain.csproj`.
+- Порты объявлены в `MiddleCsharp.Application/Abstractions/Persistence`, реализации — в `MiddleCsharp.Infrastructure/Persistence`.
+- Регистрация зависимостей — в `Program.cs`: `AddApplicationServices(builder.Configuration)` и `AddInfrastructureServices(builder.Configuration)`, миграции применяет `await app.Services.MigrateDatabaseAsync()`. Presentation не создаёт `AppDbContext` и не знает его тип.
+- `BookingStatus` сериализуется строкой через глобальный `JsonStringEnumConverter`, настроенный в Presentation, а не атрибутом на доменном перечислении.
 
 ## API
 
@@ -414,12 +434,12 @@ curl -X POST http://localhost:5027/events \
 
 ## База данных
 
-Данные хранятся в PostgreSQL; доступ идёт через Entity Framework Core. In-memory хранилища и `ConcurrentDictionary` больше не используются.
+Данные хранятся в PostgreSQL; доступ идёт через Entity Framework Core. In-memory хранилища и `ConcurrentDictionary` больше не используются. После разбиения на слои `AppDbContext`, конфигурации и миграции живут в `MiddleCsharp.Infrastructure`; схема и идентификатор миграции `InitialCreate` не менялись, поэтому существующую базу пересоздавать не нужно.
 
 - `AppDbContext` содержит `DbSet<Event> Events` и `DbSet<Booking> Bookings`, конфигурации подключаются через `ApplyConfigurationsFromAssembly`.
-- Маппинг описан в `DataAccess/Configurations` через `IEntityTypeConfiguration<T>` (Fluent API): таблицы `events`/`bookings`, колонки в snake_case (`id`, `title`, `start_at`, `event_id` и т. д.), первичные ключи с `ValueGeneratedNever()`, обязательность и максимальные длины строк, `Status` как строка, внешний ключ `bookings.event_id → events.id` с каскадным удалением, индексы по `events.start_at` и `bookings.status, created_at`.
+- Маппинг описан в `src/MiddleCsharp.Infrastructure/Persistence/Configurations` через `IEntityTypeConfiguration<T>` (Fluent API): таблицы `events`/`bookings`, колонки в snake_case (`id`, `title`, `start_at`, `event_id` и т. д.), первичные ключи с `ValueGeneratedNever()`, обязательность и максимальные длины строк, `Status` как строка, внешний ключ `bookings.event_id → events.id` с каскадным удалением, индексы по `events.start_at` и `bookings.status, created_at`.
 - `AppDbContext` — scoped. `EventService` и `BookingService` тоже scoped, но работают с данными только через репозитории.
-- Схема управляется миграциями EF Core. При старте приложение выполняет `Database.MigrateAsync()`; файлы миграций лежат в `src/MiddleCsharp/Migrations`. `EnsureCreated()` больше не используется. Проверка `EF.IsDesignTime` не даёт инструментам `dotnet ef` подключаться к базе при генерации миграций.
+- Схема управляется миграциями EF Core. При старте приложение выполняет `Database.MigrateAsync()` через `MigrateDatabaseAsync()` из Infrastructure; файлы миграций лежат в `src/MiddleCsharp.Infrastructure/Migrations`. `EnsureCreated()` больше не используется. Проверка `EF.IsDesignTime` внутри `MigrateDatabaseAsync()` не даёт инструментам `dotnet ef` подключаться к базе при генерации миграций.
 - Миграция `InitialCreate` создаёт таблицы `events` и `bookings`, колонки в snake_case и внешний ключ `bookings.event_id → events.id` с `ON DELETE CASCADE`. Повторный запуск применяет только новые миграции; история хранится в `__EFMigrationsHistory`.
 - Данные сохраняются после перезапуска приложения. Контейнер и volume можно остановить через `docker compose down` (данные сохранятся) или удалить через `docker compose down -v`.
 - Старую базу, созданную в пятом спринте через `EnsureCreated()`, нужно один раз пересоздать: у неё нет истории миграций.
@@ -427,7 +447,7 @@ curl -X POST http://localhost:5027/events \
 
 ## Репозитории и Unit of Work
 
-Работа с `AppDbContext` инкапсулирована в слое `DataAccess/Repositories`:
+Работа с `AppDbContext` инкапсулирована в слое `MiddleCsharp.Infrastructure/Persistence`: интерфейсы портов объявлены в `MiddleCsharp.Application/Abstractions/Persistence`, реализации — в `Persistence/Repositories` и `Persistence/UnitOfWork`.
 
 - `IEventRepository` / `EventRepository` — чтение события, чтение для изменения, постраничный список с фильтрами, добавление и удаление;
 - `IBookingRepository` / `BookingRepository` — чтение брони, чтение для подтверждения без события, загрузка для отказа вместе с событием, список `Pending`-id, добавление;
@@ -448,8 +468,8 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 |---|---|
 | PostgreSQL вместо памяти | `docker-compose.yml`, `UseNpgsql`; с шестого спринта схема — через миграции |
 | EF Core | пакеты `Microsoft.EntityFrameworkCore` и `Npgsql.EntityFrameworkCore.PostgreSQL` |
-| `AppDbContext` и `DbSet` | `DataAccess/AppDbContext.cs` |
-| Fluent API | `DataAccess/Configurations/EventConfiguration.cs`, `BookingConfiguration.cs` |
+| `AppDbContext` и `DbSet` | `MiddleCsharp.Infrastructure/Persistence/AppDbContext.cs` |
+| Fluent API | `MiddleCsharp.Infrastructure/Persistence/Configurations/EventConfiguration.cs`, `BookingConfiguration.cs` |
 | Приватные конструкторы и навигации | `Event`/`Booking` с приватными конструкторами без параметров, `Event.Bookings`, `Booking.Event` |
 | Сервисы работают через слой данных | В пятом спринте — напрямую с `AppDbContext`; с шестого — через репозитории и `IUnitOfWork` |
 | Scoped-регистрации | `AddDbContext`, scoped `IEventService`/`IBookingService`/`BookingProcessor` |
@@ -463,13 +483,13 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 | Требование | Реализация в проекте |
 |---|---|
 | C# / .NET 8+, ASP.NET Core Web API | `net10.0`, ASP.NET Core Web API |
-| Сборка и запуск | `dotnet build`, `dotnet run --project src/MiddleCsharp` |
+| Сборка и запуск | `dotnet build`, `dotnet run --project src/MiddleCsharp.Presentation` |
 | Тесты | `dotnet test`: 112 юнит-тестов и 37 интеграционных (149 всего) |
 | Swagger | Swagger UI и `swagger.json` доступны в Development |
 | EF Core + PostgreSQL | `Microsoft.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL`, `docker-compose.yml` |
-| Схема через миграции | `src/MiddleCsharp/Migrations`, `Database.MigrateAsync()` при старте; `EnsureCreated()` удалён |
+| Схема через миграции | `src/MiddleCsharp.Infrastructure/Migrations`, `Database.MigrateAsync()` при старте; `EnsureCreated()` удалён |
 | Начальная миграция | `InitialCreate`: таблицы `events`/`bookings`, snake_case-колонки, FK с `ON DELETE CASCADE`, индексы |
-| Репозитории Event и Booking | `DataAccess/Repositories/IEventRepository`, `EventRepository`, `IBookingRepository`, `BookingRepository` |
+| Репозитории Event и Booking | порты — `MiddleCsharp.Application/Abstractions/Persistence` (`IEventRepository`, `IBookingRepository`), реализации — `MiddleCsharp.Infrastructure/Persistence/Repositories` (`EventRepository`, `BookingRepository`) |
 | Сервисы не работают с `AppDbContext` | `EventService`, `BookingService`, `BookingProcessor` используют репозитории и `IUnitOfWork` |
 | Scoped-регистрации | `AddDbContext`, репозитории, `IUnitOfWork`, сервисы и `BookingProcessor` — scoped |
 | Фоновая обработка со scopes | `BookingProcessingService` получает `IBookingRepository` из scope через `IServiceScopeFactory` |
@@ -477,12 +497,30 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 | Изоляция тестов | один контейнер на коллекцию, перед каждым тестом `EnsureDeleted()` + `Migrate()` |
 | Нет захардкоженного порта | connection string берётся из `PostgreSqlContainer` |
 
+## Соответствие заданию седьмого спринта
+
+| Требование | Реализация в проекте |
+|---|---|
+| Четыре отдельных проекта | `MiddleCsharp.Domain`, `MiddleCsharp.Application`, `MiddleCsharp.Infrastructure`, `MiddleCsharp.Presentation` в `middle-csharp.sln` |
+| Направление зависимостей | `Application → Domain`, `Infrastructure → Application + Domain`, `Presentation → Application + Infrastructure` через `<ProjectReference>` |
+| `Application` не зависит от `Infrastructure` | у проекта один `ProjectReference` — на `Domain`; реализации портов подключаются через DI из Presentation |
+| Доменные сущности и исключения в Domain | `Domain/Entities`, `Domain/Enums`, `Domain/Exceptions`; в `MiddleCsharp.Domain.csproj` нет `PackageReference` |
+| Бизнес-логика в Application | `Application/Services` (`EventService`, `BookingService`), `Application/Processing` (`BookingProcessor`, `BookingProcessingService`) |
+| Порты в Application | `Application/Abstractions/Persistence`: `IEventRepository`, `IBookingRepository`, `IUnitOfWork` |
+| Адаптеры в Infrastructure | `Infrastructure/Persistence`: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции |
+| Composition root в Presentation | `Program.cs`: `AddApplicationServices`, `AddInfrastructureServices`, MVC, Problem Details, Swagger |
+| Тонкие контроллеры | `EventsController`/`BookingsController` только вызывают сервисы и маппят DTO; правила — в Application и Domain |
+| Обработчик исключений в Presentation | `Presentation/Middleware/ExceptionHandlingMiddleware` маппит доменные исключения в `400`/`404`/`409`/`500` |
+| Тесты по слоям | `MiddleCsharp.Tests` → Domain + Application + Infrastructure; `MiddleCsharp.Presentation.Tests` → Presentation; `MiddleCsharp.IntegrationTests` → Domain + Application + Infrastructure |
+| README | этот раздел, «Слои приложения» и обновлённая «Структура проекта» |
+
 ## Тесты
 
-Отдельные проекты на xUnit, оба ссылаются на `src/MiddleCsharp`:
+Проекты на xUnit; каждый ссылается только на свои слои:
 
-- `tests/MiddleCsharp.Tests` — быстрые юнит-тесты на EF Core InMemory;
-- `tests/MiddleCsharp.IntegrationTests` — интеграционные тесты репозиториев на реальной PostgreSQL через Testcontainers.
+- `tests/MiddleCsharp.Tests` — юнит-тесты домена, Application и InMemory-персистентности (`Domain` + `Application` + `Infrastructure`);
+- `tests/MiddleCsharp.Presentation.Tests` — middleware и фильтр `ProblemDetailsContentTypeFilter` (`Presentation`);
+- `tests/MiddleCsharp.IntegrationTests` — репозитории и миграции на реальной PostgreSQL через Testcontainers (`Domain` + `Application` + `Infrastructure`).
 
 Юнит-тестами покрыто:
 
@@ -508,7 +546,7 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 - `BookingRepository`: добавление, чтение, чтение для подтверждения без события, загрузка с событием для отказа, выборка `Pending`-id с порядком, подтверждение, отклонение с возвратом места, нарушение внешнего ключа;
 - каскадное удаление на уровне схемы PostgreSQL проверяется отдельным тестом.
 
-Всего 149 тестов: 112 юнит-тестов и 37 интеграционных.
+Всего 149 тестов: 112 юнит-тестов (103 в `MiddleCsharp.Tests` и 9 в `MiddleCsharp.Presentation.Tests`) и 37 интеграционных.
 
 Юнит-тесты написаны по принципу AAA (Arrange-Act-Assert). Каждый тест получает `TestApplication` с уникальной InMemory-базой, поэтому тесты не влияют друг на друга. Конкурентные тесты создают отдельный scope и отдельный `AppDbContext` на каждый параллельный запрос. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик.
 
@@ -526,65 +564,82 @@ middle-csharp/
 │   └── dotnet-tools.json
 ├── docker-compose.yml
 ├── src/
-│   └── MiddleCsharp/
-│       ├── BackgroundServices/
-│       │   ├── BookingProcessingOptions.cs
-│       │   ├── BookingProcessingService.cs
-│       │   └── BookingProcessor.cs
+│   ├── MiddleCsharp.Domain/
+│   │   ├── Entities/
+│   │   │   ├── Booking.cs
+│   │   │   ├── Event.cs
+│   │   │   └── EventConstraints.cs
+│   │   ├── Enums/
+│   │   │   └── BookingStatus.cs
+│   │   ├── Exceptions/
+│   │   │   ├── BookingNotFoundException.cs
+│   │   │   ├── EventNotFoundException.cs
+│   │   │   ├── EventValidationException.cs
+│   │   │   ├── NoAvailableSeatsException.cs
+│   │   │   └── NotFoundException.cs
+│   │   └── MiddleCsharp.Domain.csproj
+│   ├── MiddleCsharp.Application/
+│   │   ├── Abstractions/
+│   │   │   └── Persistence/
+│   │   │       ├── IBookingRepository.cs
+│   │   │       ├── IEventRepository.cs
+│   │   │       └── IUnitOfWork.cs
+│   │   ├── Concurrency/
+│   │   │   └── SeatReservationLock.cs
+│   │   ├── DTOs/
+│   │   │   ├── BookingInfo.cs
+│   │   │   ├── BookingMappingExtensions.cs
+│   │   │   ├── CreateEventRequest.cs
+│   │   │   ├── EventFilter.cs
+│   │   │   ├── EventMappingExtensions.cs
+│   │   │   ├── EventRequestBase.cs
+│   │   │   ├── EventResponse.cs
+│   │   │   ├── PaginatedResult.cs
+│   │   │   ├── PaginationLimits.cs
+│   │   │   └── UpdateEventRequest.cs
+│   │   ├── Processing/
+│   │   │   ├── BookingProcessingOptions.cs
+│   │   │   ├── BookingProcessingService.cs
+│   │   │   └── BookingProcessor.cs
+│   │   ├── Services/
+│   │   │   ├── BookingService.cs
+│   │   │   ├── EventService.cs
+│   │   │   ├── IBookingService.cs
+│   │   │   └── IEventService.cs
+│   │   ├── DependencyInjection.cs
+│   │   └── MiddleCsharp.Application.csproj
+│   ├── MiddleCsharp.Infrastructure/
+│   │   ├── Migrations/
+│   │   │   ├── 20261123161211_InitialCreate.cs
+│   │   │   ├── 20261123161211_InitialCreate.Designer.cs
+│   │   │   └── AppDbContextModelSnapshot.cs
+│   │   ├── Persistence/
+│   │   │   ├── Configurations/
+│   │   │   │   ├── BookingConfiguration.cs
+│   │   │   │   └── EventConfiguration.cs
+│   │   │   ├── Repositories/
+│   │   │   │   ├── BookingRepository.cs
+│   │   │   │   └── EventRepository.cs
+│   │   │   ├── AppDbContext.cs
+│   │   │   └── UnitOfWork.cs
+│   │   ├── DependencyInjection.cs
+│   │   └── MiddleCsharp.Infrastructure.csproj
+│   └── MiddleCsharp.Presentation/
 │       ├── Controllers/
 │       │   ├── BookingsController.cs
 │       │   └── EventsController.cs
-│       ├── DataAccess/
-│       │   ├── AppDbContext.cs
-│       │   ├── Configurations/
-│       │   │   ├── BookingConfiguration.cs
-│       │   │   └── EventConfiguration.cs
-│       │   ├── IUnitOfWork.cs
-│       │   ├── Repositories/
-│       │   │   ├── BookingRepository.cs
-│       │   │   ├── EventRepository.cs
-│       │   │   ├── IBookingRepository.cs
-│       │   │   └── IEventRepository.cs
-│       │   └── UnitOfWork.cs
 │       ├── DTOs/
-│       │   ├── BookingInfo.cs
-│       │   ├── BookingMappingExtensions.cs
-│       │   ├── CreateEventRequest.cs
-│       │   ├── UpdateEventRequest.cs
-│       │   ├── EventResponse.cs
-│       │   ├── EventRequestBase.cs
-│       │   ├── GetEventsQuery.cs
-│       │   ├── PaginatedResult.cs
-│       │   └── EventMappingExtensions.cs
-│       ├── Exceptions/
-│       │   ├── BookingNotFoundException.cs
-│       │   ├── EventNotFoundException.cs
-│       │   ├── EventValidationException.cs
-│       │   ├── NoAvailableSeatsException.cs
-│       │   └── NotFoundException.cs
+│       │   └── GetEventsQuery.cs
 │       ├── Filters/
 │       │   └── ProblemDetailsContentTypeFilter.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
-│       ├── Migrations/
-│       │   ├── 20261123161211_InitialCreate.cs
-│       │   ├── 20261123161211_InitialCreate.Designer.cs
-│       │   └── AppDbContextModelSnapshot.cs
-│       ├── Models/
-│       │   ├── Booking.cs
-│       │   ├── BookingStatus.cs
-│       │   ├── Event.cs
-│       │   ├── EventConstraints.cs
-│       │   └── EventFilter.cs
-│       ├── Services/
-│       │   ├── IBookingService.cs
-│       │   ├── BookingService.cs
-│       │   ├── IEventService.cs
-│       │   ├── EventService.cs
-│       │   ├── PaginationLimits.cs
-│       │   └── SeatReservationLock.cs
-│       ├── Program.cs
-│       └── middle-csharp.csproj
+│       ├── Properties/
+│       │   └── launchSettings.json
+│       ├── appsettings.Development.json
+│       ├── appsettings.json
+│       ├── MiddleCsharp.Presentation.csproj
+│       └── Program.cs
 ├── tests/
 │   ├── MiddleCsharp.IntegrationTests/
 │   │   ├── BookingRepositoryTests.cs
@@ -594,16 +649,18 @@ middle-csharp/
 │   │   ├── PostgresFixture.cs
 │   │   ├── RepositoryTestBase.cs
 │   │   └── MiddleCsharp.IntegrationTests.csproj
+│   ├── MiddleCsharp.Presentation.Tests/
+│   │   ├── Filters/
+│   │   │   └── ProblemDetailsContentTypeFilterTests.cs
+│   │   ├── Middleware/
+│   │   │   └── ExceptionHandlingMiddlewareTests.cs
+│   │   └── MiddleCsharp.Presentation.Tests.csproj
 │   └── MiddleCsharp.Tests/
 │       ├── BackgroundServices/
 │       │   ├── BookingProcessingServiceTests.cs
 │       │   └── BookingProcessorTests.cs
 │       ├── DTOs/
 │       │   └── EventRequestValidationTests.cs
-│       ├── Filters/
-│       │   └── ProblemDetailsContentTypeFilterTests.cs
-│       ├── Middleware/
-│       │   └── ExceptionHandlingMiddlewareTests.cs
 │       ├── Models/
 │       │   ├── BookingTests.cs
 │       │   └── EventTests.cs
