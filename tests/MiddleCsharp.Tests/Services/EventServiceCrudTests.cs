@@ -1,6 +1,6 @@
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Exceptions;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.Services;
 

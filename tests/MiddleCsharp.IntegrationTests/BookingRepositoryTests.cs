@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
-using MiddleCsharp.Models;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Enums;
 
 namespace MiddleCsharp.IntegrationTests;
 

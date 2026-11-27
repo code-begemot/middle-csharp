@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DTOs;
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.DTOs;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Enums;
+using MiddleCsharp.Domain.Exceptions;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.Services;
 

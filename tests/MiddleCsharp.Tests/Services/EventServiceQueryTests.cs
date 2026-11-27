@@ -1,6 +1,7 @@
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.DTOs;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Exceptions;
 
 namespace MiddleCsharp.Tests.Services;
 

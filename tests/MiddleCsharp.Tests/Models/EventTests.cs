@@ -1,4 +1,4 @@
-using MiddleCsharp.Models;
+using MiddleCsharp.Domain.Entities;
 
 namespace MiddleCsharp.Tests.Models;
 

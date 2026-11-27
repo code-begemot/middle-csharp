@@ -2,10 +2,10 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Middleware;
+using MiddleCsharp.Domain.Exceptions;
+using MiddleCsharp.Presentation.Middleware;
 
-namespace MiddleCsharp.Tests.Middleware;
+namespace MiddleCsharp.Presentation.Tests.Middleware;
 
 public class ExceptionHandlingMiddlewareTests
 {

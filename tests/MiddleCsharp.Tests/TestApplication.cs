@@ -1,9 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using MiddleCsharp.BackgroundServices;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DataAccess.Repositories;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Abstractions.Persistence;
+using MiddleCsharp.Application.Processing;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Infrastructure.Persistence;
+using MiddleCsharp.Infrastructure.Persistence.Repositories;
 
 namespace MiddleCsharp.Tests;
 

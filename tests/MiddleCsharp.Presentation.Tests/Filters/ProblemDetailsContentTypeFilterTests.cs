@@ -3,9 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
-using MiddleCsharp.Filters;
+using MiddleCsharp.Presentation.Filters;
 
-namespace MiddleCsharp.Tests.Filters;
+namespace MiddleCsharp.Presentation.Tests.Filters;
 
 public class ProblemDetailsContentTypeFilterTests
 {
