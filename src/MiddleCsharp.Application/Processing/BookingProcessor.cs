@@ -10,17 +10,20 @@ internal sealed class BookingProcessor
 {
     private readonly IBookingRepository _bookings;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ISeatReservationLock _seatReservationLock;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<BookingProcessor> _logger;
 
     public BookingProcessor(
         IBookingRepository bookings,
         IUnitOfWork unitOfWork,
+        ISeatReservationLock seatReservationLock,
         TimeProvider timeProvider,
         ILogger<BookingProcessor> logger)
     {
         _bookings = bookings;
         _unitOfWork = unitOfWork;
+        _seatReservationLock = seatReservationLock;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -69,7 +72,7 @@ internal sealed class BookingProcessor
     {
         try
         {
-            await SeatReservationLock.Instance.WaitAsync(cancellationToken);
+            await _seatReservationLock.WaitAsync(cancellationToken);
 
             try
             {
@@ -96,7 +99,7 @@ internal sealed class BookingProcessor
             }
             finally
             {
-                SeatReservationLock.Instance.Release();
+                _seatReservationLock.Release();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

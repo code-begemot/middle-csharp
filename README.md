@@ -50,11 +50,11 @@ docker compose exec postgres psql -U postgres -d eventapi -c 'TABLE "__EFMigrati
 
 ```bash
 dotnet tool restore
-dotnet ef migrations add <Name> --project src/MiddleCsharp.Infrastructure --startup-project src/MiddleCsharp.Presentation
-dotnet ef database update --project src/MiddleCsharp.Infrastructure --startup-project src/MiddleCsharp.Presentation
+dotnet ef migrations add <Name> --project src/MiddleCsharp.Infrastructure
+dotnet ef database update --project src/MiddleCsharp.Infrastructure
 ```
 
-`dotnet tool restore` нужен один раз после клонирования: версия `dotnet-ef` зафиксирована в `.config/dotnet-tools.json`. Миграции лежат в проекте `MiddleCsharp.Infrastructure`, а запускаемым проектом для инструментов остаётся веб-проект: он знает строку подключения и параметры хоста. Обычно `dotnet ef database update` вручную не требуется — приложение применяет миграции при старте.
+`dotnet tool restore` нужен один раз после клонирования: версия `dotnet-ef` зафиксирована в `.config/dotnet-tools.json`. Миграции и `IDesignTimeDbContextFactory<AppDbContext>` лежат в `MiddleCsharp.Infrastructure`, поэтому `--startup-project` не нужен: инструменты создают контекст через фабрику. Строку подключения фабрика берёт из переменной `ConnectionStrings__DefaultConnection`, иначе использует локальную по умолчанию. Обычно `dotnet ef database update` вручную не требуется — приложение применяет миграции при старте.
 
 По умолчанию запускается http-профиль, приложение слушает:
 
@@ -74,6 +74,8 @@ dotnet dev-certs https --trust
 ```
 
 Точные адреса всегда печатаются в консоли при запуске (`Now listening on: ...`).
+
+Редирект на https управляется настройкой `HttpsRedirection:Enabled` (по умолчанию `true`). В http-профиле она выключена переменной окружения `HttpsRedirection__Enabled=false`: https-адреса нет, поэтому middleware не подключается и в лог не попадает предупреждение `Failed to determine the https port for redirect`. В https-профиле редирект включён и перенаправляет `http://localhost:5027` на `https://localhost:7054`.
 
 ## Сборка и тесты
 
@@ -96,15 +98,17 @@ dotnet test tests/MiddleCsharp.Presentation.Tests/MiddleCsharp.Presentation.Test
 | Слой | Назначение | Зависит от |
 |---|---|---|
 | `MiddleCsharp.Domain` | доменные сущности `Event`/`Booking`, перечисление `BookingStatus`, `EventConstraints`, доменные исключения | ни от чего |
-| `MiddleCsharp.Application` | use cases (`EventService`, `BookingService`), порты (`IEventRepository`, `IBookingRepository`, `IUnitOfWork`), DTO, фоновая обработка | только `Domain` |
-| `MiddleCsharp.Infrastructure` | адаптеры портов: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции | `Application`, `Domain` |
-| `MiddleCsharp.Presentation` | контроллеры, HTTP-маппинг (`GetEventsQuery`), middleware ошибок, фильтр Problem Details, composition root | `Application`, `Infrastructure` |
+| `MiddleCsharp.Application` | use cases (`EventService`, `BookingService`), команды (`CreateEventCommand`, `UpdateEventCommand`), порты (`IEventRepository`, `IBookingRepository`, `IUnitOfWork`, `ISeatReservationLock`), DTO, фоновая обработка | только `Domain` |
+| `MiddleCsharp.Infrastructure` | адаптеры портов: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции, design-time фабрика | `Application`, `Domain` |
+| `MiddleCsharp.Presentation` | контроллеры, HTTP-маппинг (`GetEventsQuery`), middleware ошибок, фильтр Problem Details, composition root | `Application`, `Domain`, `Infrastructure` |
 
 Правила направления зависимостей:
 
 - `Application` не ссылается на `Infrastructure`: бизнес-логика знает только интерфейсы портов. Обратная ссылка дала бы цикл проектов, поэтому нарушение ловится на сборке.
 - `Domain` не содержит ни одного пакета и не импортирует ASP.NET Core, EF Core, логирование и JSON-атрибуты. Проверяется пустым списком `PackageReference` в `MiddleCsharp.Domain.csproj`.
-- Порты объявлены в `MiddleCsharp.Application/Abstractions/Persistence`, реализации — в `MiddleCsharp.Infrastructure/Persistence`.
+- Порты объявлены в `MiddleCsharp.Application/Abstractions/Persistence`, реализации — в `MiddleCsharp.Infrastructure/Persistence`. Лок резервирования мест — порт `ISeatReservationLock` в `Application/Concurrency`, реализация регистрируется в DI как singleton.
+- `IEventService` не выпускает доменный агрегат: чтение возвращает `EventResponse` и `PaginatedResult<EventResponse>`, запись принимает `CreateEventCommand`/`UpdateEventCommand`. Presentation не видит `Domain.Entities` и не может обойти правила сущности.
+- `Presentation` ссылается на `Domain` явно: middleware маппит доменные исключения (`EventNotFoundException`, `NoAvailableSeatsException` и другие). Это единственная причина, по которой слой знает домен; на `Domain.Entities` Presentation не завязан.
 - Регистрация зависимостей — в `Program.cs`: `AddApplicationServices(builder.Configuration)` и `AddInfrastructureServices(builder.Configuration)`, миграции применяет `await app.Services.MigrateDatabaseAsync()`. Presentation не создаёт `AppDbContext` и не знает его тип.
 - `BookingStatus` сериализуется строкой через глобальный `JsonStringEnumConverter`, настроенный в Presentation, а не атрибутом на доменном перечислении.
 
@@ -187,7 +191,7 @@ curl "http://localhost:5027/events?title=meet&from=2025-01-01T00:00:00&page=2&pa
 - `totalCount` — общее количество событий после фильтрации;
 - `page` — номер текущей страницы;
 - `pageSize` — размер страницы;
-- `totalPages` — общее количество страниц (`0`, если ничего не найдено);
+- `totalPages` — общее количество страниц (`0`, если ничего не найдено); вычисляется в `PaginatedResult<T>` из `totalCount` и `pageSize`, адаптер эти два поля только заполняет;
 - `items` — события текущей страницы.
 
 Если запрошена страница за пределами диапазона, возвращается `200` с пустым `items` и реальными `totalCount`/`totalPages`.
@@ -439,7 +443,7 @@ curl -X POST http://localhost:5027/events \
 - `AppDbContext` содержит `DbSet<Event> Events` и `DbSet<Booking> Bookings`, конфигурации подключаются через `ApplyConfigurationsFromAssembly`.
 - Маппинг описан в `src/MiddleCsharp.Infrastructure/Persistence/Configurations` через `IEntityTypeConfiguration<T>` (Fluent API): таблицы `events`/`bookings`, колонки в snake_case (`id`, `title`, `start_at`, `event_id` и т. д.), первичные ключи с `ValueGeneratedNever()`, обязательность и максимальные длины строк, `Status` как строка, внешний ключ `bookings.event_id → events.id` с каскадным удалением, индексы по `events.start_at` и `bookings.status, created_at`.
 - `AppDbContext` — scoped. `EventService` и `BookingService` тоже scoped, но работают с данными только через репозитории.
-- Схема управляется миграциями EF Core. При старте приложение выполняет `Database.MigrateAsync()` через `MigrateDatabaseAsync()` из Infrastructure; файлы миграций лежат в `src/MiddleCsharp.Infrastructure/Migrations`. `EnsureCreated()` больше не используется. Проверка `EF.IsDesignTime` внутри `MigrateDatabaseAsync()` не даёт инструментам `dotnet ef` подключаться к базе при генерации миграций.
+- Схема управляется миграциями EF Core. При старте приложение выполняет `Database.MigrateAsync()` через `MigrateDatabaseAsync()` из Infrastructure; файлы миграций лежат в `src/MiddleCsharp.Infrastructure/Migrations`. `EnsureCreated()` больше не используется. Проверка `EF.IsDesignTime` внутри `MigrateDatabaseAsync()` не даёт инструментам `dotnet ef` подключаться к базе при генерации миграций, а нереляционные провайдеры (EF InMemory в юнит-тестах) миграции пропускают. Для `dotnet ef` в Infrastructure объявлен `IDesignTimeDbContextFactory<AppDbContext>` (`AppDbContextFactory`), поэтому команда работает без `--startup-project`.
 - Миграция `InitialCreate` создаёт таблицы `events` и `bookings`, колонки в snake_case и внешний ключ `bookings.event_id → events.id` с `ON DELETE CASCADE`. Повторный запуск применяет только новые миграции; история хранится в `__EFMigrationsHistory`.
 - Данные сохраняются после перезапуска приложения. Контейнер и volume можно остановить через `docker compose down` (данные сохранятся) или удалить через `docker compose down -v`.
 - Старую базу, созданную в пятом спринте через `EnsureCreated()`, нужно один раз пересоздать: у неё нет истории миграций.
@@ -449,7 +453,7 @@ curl -X POST http://localhost:5027/events \
 
 Работа с `AppDbContext` инкапсулирована в слое `MiddleCsharp.Infrastructure/Persistence`: интерфейсы портов объявлены в `MiddleCsharp.Application/Abstractions/Persistence`, реализации — в `Persistence/Repositories` и `Persistence/UnitOfWork`.
 
-- `IEventRepository` / `EventRepository` — чтение события, чтение для изменения, постраничный список с фильтрами, добавление и удаление;
+- `IEventRepository` / `EventRepository` — чтение события, чтение для изменения, постраничный список с фильтрами, добавление и удаление; адаптер заполняет `TotalCount`, `Page`, `PageSize` и `Items`, а `TotalPages` вычисляет `PaginatedResult<T>`;
 - `IBookingRepository` / `BookingRepository` — чтение брони, чтение для подтверждения без события, загрузка для отказа вместе с событием, список `Pending`-id, добавление;
 - `IUnitOfWork` / `UnitOfWork` — единая точка сохранения изменений и очистки трекера.
 
@@ -484,7 +488,7 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 |---|---|
 | C# / .NET 8+, ASP.NET Core Web API | `net10.0`, ASP.NET Core Web API |
 | Сборка и запуск | `dotnet build`, `dotnet run --project src/MiddleCsharp.Presentation` |
-| Тесты | `dotnet test`: 112 юнит-тестов и 37 интеграционных (149 всего) |
+| Тесты | `dotnet test`: 125 юнит-тестов и 37 интеграционных (162 всего) |
 | Swagger | Swagger UI и `swagger.json` доступны в Development |
 | EF Core + PostgreSQL | `Microsoft.EntityFrameworkCore`, `Npgsql.EntityFrameworkCore.PostgreSQL`, `docker-compose.yml` |
 | Схема через миграции | `src/MiddleCsharp.Infrastructure/Migrations`, `Database.MigrateAsync()` при старте; `EnsureCreated()` удалён |
@@ -502,16 +506,17 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 | Требование | Реализация в проекте |
 |---|---|
 | Четыре отдельных проекта | `MiddleCsharp.Domain`, `MiddleCsharp.Application`, `MiddleCsharp.Infrastructure`, `MiddleCsharp.Presentation` в `middle-csharp.sln` |
-| Направление зависимостей | `Application → Domain`, `Infrastructure → Application + Domain`, `Presentation → Application + Infrastructure` через `<ProjectReference>` |
+| Направление зависимостей | `Application → Domain`, `Infrastructure → Application + Domain`, `Presentation → Application + Domain + Infrastructure` через `<ProjectReference>` |
 | `Application` не зависит от `Infrastructure` | у проекта один `ProjectReference` — на `Domain`; реализации портов подключаются через DI из Presentation |
 | Доменные сущности и исключения в Domain | `Domain/Entities`, `Domain/Enums`, `Domain/Exceptions`; в `MiddleCsharp.Domain.csproj` нет `PackageReference` |
 | Бизнес-логика в Application | `Application/Services` (`EventService`, `BookingService`), `Application/Processing` (`BookingProcessor`, `BookingProcessingService`) |
-| Порты в Application | `Application/Abstractions/Persistence`: `IEventRepository`, `IBookingRepository`, `IUnitOfWork` |
-| Адаптеры в Infrastructure | `Infrastructure/Persistence`: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции |
-| Composition root в Presentation | `Program.cs`: `AddApplicationServices`, `AddInfrastructureServices`, MVC, Problem Details, Swagger |
-| Тонкие контроллеры | `EventsController`/`BookingsController` только вызывают сервисы и маппят DTO; правила — в Application и Domain |
-| Обработчик исключений в Presentation | `Presentation/Middleware/ExceptionHandlingMiddleware` маппит доменные исключения в `400`/`404`/`409`/`500` |
-| Тесты по слоям | `MiddleCsharp.Tests` → Domain + Application + Infrastructure; `MiddleCsharp.Presentation.Tests` → Presentation; `MiddleCsharp.IntegrationTests` → Domain + Application + Infrastructure |
+| Порты в Application | `Application/Abstractions/Persistence`: `IEventRepository`, `IBookingRepository`, `IUnitOfWork`; `Application/Concurrency`: `ISeatReservationLock` |
+| Адаптеры в Infrastructure | `Infrastructure/Persistence`: `AppDbContext`, конфигурации Fluent API, репозитории, `UnitOfWork`, миграции, `AppDbContextFactory` для `dotnet ef` |
+| Composition root в Presentation | `Program.cs`: `AddApplicationServices`, `AddInfrastructureServices`, MVC, Problem Details, Swagger; проверяется smoke-тестами на `WebApplicationFactory` |
+| Тонкие контроллеры | `EventsController`/`BookingsController` только читают запрос, вызывают сервис и возвращают DTO; правила — в Application и Domain |
+| Presentation не видит доменный агрегат | `IEventService` отдаёт `EventResponse`/`PaginatedResult<EventResponse>` и принимает `CreateEventCommand`/`UpdateEventCommand`; `Domain.Entities` остаётся внутри Application |
+| Обработчик исключений в Presentation | `Presentation/Middleware/ExceptionHandlingMiddleware` маппит доменные исключения в `400`/`404`/`409`/`500`; ссылка на `Domain` объявлена явно |
+| Тесты по слоям | `MiddleCsharp.Tests` → Domain + Application + Infrastructure; `MiddleCsharp.Presentation.Tests` → Presentation + Infrastructure + Domain (composition root); `MiddleCsharp.IntegrationTests` → Domain + Application + Infrastructure |
 | README | этот раздел, «Слои приложения» и обновлённая «Структура проекта» |
 
 ## Тесты
@@ -519,7 +524,7 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 Проекты на xUnit; каждый ссылается только на свои слои:
 
 - `tests/MiddleCsharp.Tests` — юнит-тесты домена, Application и InMemory-персистентности (`Domain` + `Application` + `Infrastructure`);
-- `tests/MiddleCsharp.Presentation.Tests` — middleware и фильтр `ProblemDetailsContentTypeFilter` (`Presentation`);
+- `tests/MiddleCsharp.Presentation.Tests` — middleware, фильтр `ProblemDetailsContentTypeFilter`, политика https-редиректа и smoke-тесты composition root (`Presentation` + `Infrastructure` + `Domain`);
 - `tests/MiddleCsharp.IntegrationTests` — репозитории и миграции на реальной PostgreSQL через Testcontainers (`Domain` + `Application` + `Infrastructure`).
 
 Юнит-тестами покрыто:
@@ -528,11 +533,13 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 - неуспешные сценарии: неизвестный id для `GET`/`PUT`/`DELETE`, пустой `Title`, отсутствующие даты, `EndAt <= StartAt`, слишком длинные `Title`/`Description`;
 - валидация DTO: обязательность дат и `TotalSeats`, `EndAt <= StartAt`, `StringLength`, валидный запрос;
 - фильтрация: по названию (регистр, часть строки, отсутствие совпадений, пустая строка), `from`, `to`, диапазон дат, комбинированные фильтры, ошибка при `from > to`;
-- пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустая база;
+- пагинация: первая/средняя/последняя страница, страница за пределами, очень большой номер страницы, `pageSize` больше количества и больше допустимого максимума, порядок по `startAt`, невалидные `page`/`pageSize`, пустая база, вычисление `TotalPages` в DTO (включая нулевой `totalCount` и `pageSize`);
 - middleware: `400`/`404`/`409`/`413`/`500`, `Content-Type: application/problem+json`, `status`/`title`/`detail`, отсутствие внутренних деталей в ответе `500`, отсутствие ответа при отмене запроса клиентом;
 - фильтр `ProblemDetailsContentTypeFilter`: `415` от MVC отдаётся с `application/problem+json`, обычные `ObjectResult` не меняются;
+- политика https-редиректа: настройка `HttpsRedirection:Enabled`, значение по умолчанию `true`, явное выключение через `HttpsRedirection__Enabled=false`;
+- composition root: `GET /events` → `200` с `application/json`, `GET /events/{unknown}` → `404` с `application/problem+json`, `POST /events` → `201` и созданное событие читается по `Location`;
 - сущность `Event`: конструктор, нормализация дат, резерв одного и нескольких мест, нехватка мест, возврат мест, ограничение сверху `TotalSeats`, ненулевое количество, `UpdateDetails` сохраняет места;
-- `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, каскадное удаление броней вместе с событием;
+- `EventService` и места: `AvailableSeats == TotalSeats` при создании, `TotalSeats <= 0`, сохранение мест при `PUT`, каскадное удаление броней вместе с событием; сервис отдаёт DTO и не оставляет агрегат в трекере;
 - сущность `Booking`: создание в статусе `Pending`, `Confirm`/`Reject`, заполнение `ProcessedAt`, запрет повторной обработки, проверка обязательных дат;
 - `BookingService`: создание брони для существующего события, уменьшение `AvailableSeats`, бронирование до лимита мест, `NoAvailableSeatsException` после исчерпания, уникальные `Id`, чтение по `Id` без расхода места, отражение смены статуса, ошибки для несуществующего и удалённого события, неизвестной брони;
 - конкурентность `BookingService`: 5 мест и 20 параллельных запросов, каждый в отдельном scope, дают ровно 5 успешных броней и 15 отказов, `AvailableSeats = 0`; 10 мест и 10 параллельных запросов дают 10 уникальных `Id`;
@@ -546,7 +553,7 @@ docker compose exec postgres psql -U postgres -d eventapi -c "select id, title, 
 - `BookingRepository`: добавление, чтение, чтение для подтверждения без события, загрузка с событием для отказа, выборка `Pending`-id с порядком, подтверждение, отклонение с возвратом места, нарушение внешнего ключа;
 - каскадное удаление на уровне схемы PostgreSQL проверяется отдельным тестом.
 
-Всего 149 тестов: 112 юнит-тестов (103 в `MiddleCsharp.Tests` и 9 в `MiddleCsharp.Presentation.Tests`) и 37 интеграционных.
+Всего 162 теста: 125 юнит-тестов (110 в `MiddleCsharp.Tests` и 15 в `MiddleCsharp.Presentation.Tests`) и 37 интеграционных.
 
 Юнит-тесты написаны по принципу AAA (Arrange-Act-Assert). Каждый тест получает `TestApplication` с уникальной InMemory-базой, поэтому тесты не влияют друг на друга. Конкурентные тесты создают отдельный scope и отдельный `AppDbContext` на каждый параллельный запрос. Тест параллельной обработки не измеряет миллисекунды: `DelayTrackingTimeProvider` считает одновременно запущенные задержки и проверяет пик.
 
@@ -583,8 +590,12 @@ middle-csharp/
 │   │   │   └── Persistence/
 │   │   │       ├── IBookingRepository.cs
 │   │   │       ├── IEventRepository.cs
-│   │   │       └── IUnitOfWork.cs
+│   │   │       ├── IUnitOfWork.cs
+│   │   ├── Commands/
+│   │   │   ├── CreateEventCommand.cs
+│   │   │   └── UpdateEventCommand.cs
 │   │   ├── Concurrency/
+│   │   │   ├── ISeatReservationLock.cs
 │   │   │   └── SeatReservationLock.cs
 │   │   ├── DTOs/
 │   │   │   ├── BookingInfo.cs
@@ -621,6 +632,7 @@ middle-csharp/
 │   │   │   │   ├── BookingRepository.cs
 │   │   │   │   └── EventRepository.cs
 │   │   │   ├── AppDbContext.cs
+│   │   │   ├── AppDbContextFactory.cs
 │   │   │   └── UnitOfWork.cs
 │   │   ├── DependencyInjection.cs
 │   │   └── MiddleCsharp.Infrastructure.csproj
@@ -632,6 +644,8 @@ middle-csharp/
 │       │   └── GetEventsQuery.cs
 │       ├── Filters/
 │       │   └── ProblemDetailsContentTypeFilter.cs
+│       ├── Hosting/
+│       │   └── HttpsRedirectionPolicy.cs
 │       ├── Middleware/
 │       │   └── ExceptionHandlingMiddleware.cs
 │       ├── Properties/
@@ -652,6 +666,10 @@ middle-csharp/
 │   ├── MiddleCsharp.Presentation.Tests/
 │   │   ├── Filters/
 │   │   │   └── ProblemDetailsContentTypeFilterTests.cs
+│   │   ├── Hosting/
+│   │   │   ├── CompositionRootTests.cs
+│   │   │   ├── HttpsRedirectionPolicyTests.cs
+│   │   │   └── PresentationApplicationFactory.cs
 │   │   ├── Middleware/
 │   │   │   └── ExceptionHandlingMiddlewareTests.cs
 │   │   └── MiddleCsharp.Presentation.Tests.csproj
@@ -660,7 +678,8 @@ middle-csharp/
 │       │   ├── BookingProcessingServiceTests.cs
 │       │   └── BookingProcessorTests.cs
 │       ├── DTOs/
-│       │   └── EventRequestValidationTests.cs
+│       │   ├── EventRequestValidationTests.cs
+│       │   └── PaginatedResultTests.cs
 │       ├── Models/
 │       │   ├── BookingTests.cs
 │       │   └── EventTests.cs

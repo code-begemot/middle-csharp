@@ -11,17 +11,20 @@ internal sealed class BookingService : IBookingService
     private readonly IEventRepository _events;
     private readonly IBookingRepository _bookings;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ISeatReservationLock _seatReservationLock;
     private readonly TimeProvider _timeProvider;
 
     public BookingService(
         IEventRepository events,
         IBookingRepository bookings,
         IUnitOfWork unitOfWork,
+        ISeatReservationLock seatReservationLock,
         TimeProvider timeProvider)
     {
         _events = events;
         _bookings = bookings;
         _unitOfWork = unitOfWork;
+        _seatReservationLock = seatReservationLock;
         _timeProvider = timeProvider;
     }
 
@@ -29,7 +32,7 @@ internal sealed class BookingService : IBookingService
         Guid eventId,
         CancellationToken cancellationToken = default)
     {
-        await SeatReservationLock.Instance.WaitAsync(cancellationToken);
+        await _seatReservationLock.WaitAsync(cancellationToken);
 
         Booking booking;
 
@@ -55,7 +58,7 @@ internal sealed class BookingService : IBookingService
         }
         finally
         {
-            SeatReservationLock.Instance.Release();
+            _seatReservationLock.Release();
         }
 
         return booking.ToInfo();

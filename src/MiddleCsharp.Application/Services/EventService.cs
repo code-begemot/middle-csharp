@@ -1,4 +1,5 @@
 using MiddleCsharp.Application.Abstractions.Persistence;
+using MiddleCsharp.Application.Commands;
 using MiddleCsharp.Application.Concurrency;
 using MiddleCsharp.Application.DTOs;
 using MiddleCsharp.Domain.Entities;
@@ -10,21 +11,26 @@ internal sealed class EventService : IEventService
 {
     private readonly IEventRepository _events;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ISeatReservationLock _seatReservationLock;
 
-    public EventService(IEventRepository events, IUnitOfWork unitOfWork)
+    public EventService(
+        IEventRepository events,
+        IUnitOfWork unitOfWork,
+        ISeatReservationLock seatReservationLock)
     {
         _events = events;
         _unitOfWork = unitOfWork;
+        _seatReservationLock = seatReservationLock;
     }
 
-    public async Task<Event> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var evt = await _events.GetByIdAsync(id, cancellationToken);
 
-        return evt ?? throw new EventNotFoundException(id);
+        return (evt ?? throw new EventNotFoundException(id)).ToResponse();
     }
 
-    public async Task<PaginatedResult<Event>> GetAllAsync(
+    public async Task<PaginatedResult<EventResponse>> GetAllAsync(
         EventFilter filter,
         int page,
         int pageSize,
@@ -45,46 +51,52 @@ internal sealed class EventService : IEventService
             throw new EventValidationException("From must be earlier than or equal to To.");
         }
 
-        return await _events.GetPageAsync(filter, page, pageSize, cancellationToken);
+        var result = await _events.GetPageAsync(filter, page, pageSize, cancellationToken);
+
+        return result.ToResponse();
     }
 
-    public async Task<Event> CreateAsync(Event newEvent, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> CreateAsync(
+        CreateEventCommand command,
+        CancellationToken cancellationToken = default)
     {
-        Validate(newEvent);
+        var newEvent = new Event(
+            command.Title,
+            command.Description,
+            command.StartAt,
+            command.EndAt,
+            command.TotalSeats);
 
-        if (newEvent.TotalSeats <= 0)
-        {
-            throw new EventValidationException("TotalSeats must be greater than 0.");
-        }
+        Validate(newEvent);
 
         await _events.AddAsync(newEvent, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return newEvent;
+        return newEvent.ToResponse();
     }
 
     public async Task UpdateAsync(
         Guid id,
-        Event updatedEvent,
+        UpdateEventCommand command,
         CancellationToken cancellationToken = default)
     {
-        Validate(updatedEvent);
+        ValidateDetails(command.Title, command.Description, command.StartAt, command.EndAt);
 
         var stored = await _events.GetByIdForUpdateAsync(id, cancellationToken)
             ?? throw new EventNotFoundException(id);
 
         stored.UpdateDetails(
-            updatedEvent.Title,
-            updatedEvent.Description,
-            updatedEvent.StartAt,
-            updatedEvent.EndAt);
+            command.Title,
+            command.Description,
+            command.StartAt,
+            command.EndAt);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        await SeatReservationLock.Instance.WaitAsync(cancellationToken);
+        await _seatReservationLock.WaitAsync(cancellationToken);
 
         try
         {
@@ -97,40 +109,54 @@ internal sealed class EventService : IEventService
         }
         finally
         {
-            SeatReservationLock.Instance.Release();
+            _seatReservationLock.Release();
         }
     }
 
     private static void Validate(Event evt)
     {
-        if (string.IsNullOrWhiteSpace(evt.Title))
+        ValidateDetails(evt.Title, evt.Description, evt.StartAt, evt.EndAt);
+
+        if (evt.TotalSeats <= 0)
+        {
+            throw new EventValidationException("TotalSeats must be greater than 0.");
+        }
+    }
+
+    private static void ValidateDetails(
+        string title,
+        string? description,
+        DateTime startAt,
+        DateTime endAt)
+    {
+        if (string.IsNullOrWhiteSpace(title))
         {
             throw new EventValidationException("Title is required.");
         }
 
-        if (evt.Title.Length > EventConstraints.TitleMaxLength)
+        if (title.Length > EventConstraints.TitleMaxLength)
         {
             throw new EventValidationException(
                 $"Title must be at most {EventConstraints.TitleMaxLength} characters long.");
         }
 
-        if (evt.Description?.Length > EventConstraints.DescriptionMaxLength)
+        if (description?.Length > EventConstraints.DescriptionMaxLength)
         {
             throw new EventValidationException(
                 $"Description must be at most {EventConstraints.DescriptionMaxLength} characters long.");
         }
 
-        if (evt.StartAt == default)
+        if (startAt == default)
         {
             throw new EventValidationException("StartAt is required.");
         }
 
-        if (evt.EndAt == default)
+        if (endAt == default)
         {
             throw new EventValidationException("EndAt is required.");
         }
 
-        if (evt.EndAt <= evt.StartAt)
+        if (endAt <= startAt)
         {
             throw new EventValidationException("EndAt must be later than StartAt.");
         }

@@ -36,6 +36,12 @@ public static class DependencyInjection
 
         await using var scope = services.CreateAsyncScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        if (!context.Database.IsRelational())
+        {
+            return;
+        }
+
         await context.Database.MigrateAsync();
     }
 }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MiddleCsharp.Application.Concurrency;
 using MiddleCsharp.Application.Processing;
 using MiddleCsharp.Application.Services;
 
@@ -13,6 +14,7 @@ public static class DependencyInjection
         IConfiguration configuration)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<ISeatReservationLock, SeatReservationLock>();
 
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IBookingService, BookingService>();

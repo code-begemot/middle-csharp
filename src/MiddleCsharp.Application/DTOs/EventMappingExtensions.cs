@@ -1,22 +1,22 @@
+using MiddleCsharp.Application.Commands;
 using MiddleCsharp.Domain.Entities;
 
 namespace MiddleCsharp.Application.DTOs;
 
 public static class EventMappingExtensions
 {
-    public static Event ToEntity(this CreateEventRequest request) => new(
+    public static CreateEventCommand ToCommand(this CreateEventRequest request) => new(
         request.Title,
         request.Description,
         request.StartAt ?? default,
         request.EndAt ?? default,
         request.TotalSeats ?? default);
 
-    public static Event ToEntity(this UpdateEventRequest request) => new(
+    public static UpdateEventCommand ToCommand(this UpdateEventRequest request) => new(
         request.Title,
         request.Description,
         request.StartAt ?? default,
-        request.EndAt ?? default,
-        totalSeats: 0);
+        request.EndAt ?? default);
 
     public static EventResponse ToResponse(this Event evt) => new()
     {
@@ -34,7 +34,6 @@ public static class EventMappingExtensions
         TotalCount = result.TotalCount,
         Page = result.Page,
         PageSize = result.PageSize,
-        TotalPages = result.TotalPages,
         Items = result.Items.Select(ToResponse).ToList()
     };
 }

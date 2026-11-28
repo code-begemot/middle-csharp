@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using MiddleCsharp.Application;
 using MiddleCsharp.Infrastructure;
 using MiddleCsharp.Presentation.Filters;
+using MiddleCsharp.Presentation.Hosting;
 using MiddleCsharp.Presentation.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -67,7 +68,16 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// http-профиль выключает редирект: https-адреса нет, middleware только шумел бы в лог.
+if (HttpsRedirectionPolicy.IsEnabled(app.Configuration))
+{
+    app.UseHttpsRedirection();
+}
+
 app.MapControllers();
 
 app.Run();
+
+public partial class Program
+{
+}

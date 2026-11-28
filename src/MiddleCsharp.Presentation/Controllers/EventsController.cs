@@ -41,7 +41,7 @@ public class EventsController : ControllerBase
             query.PageSize,
             cancellationToken);
 
-        return Ok(result.ToResponse());
+        return Ok(result);
     }
 
     [HttpGet("{id:guid}")]
@@ -62,7 +62,7 @@ public class EventsController : ControllerBase
         CancellationToken cancellationToken)
     {
         var evt = await _eventService.GetByIdAsync(id, cancellationToken);
-        return Ok(evt.ToResponse());
+        return Ok(evt);
     }
 
     [HttpPost]
@@ -90,8 +90,8 @@ public class EventsController : ControllerBase
         [FromBody] CreateEventRequest request,
         CancellationToken cancellationToken)
     {
-        var created = await _eventService.CreateAsync(request.ToEntity(), cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created.ToResponse());
+        var created = await _eventService.CreateAsync(request.ToCommand(), cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpPut("{id:guid}")]
@@ -121,7 +121,7 @@ public class EventsController : ControllerBase
         [FromBody] UpdateEventRequest request,
         CancellationToken cancellationToken)
     {
-        await _eventService.UpdateAsync(id, request.ToEntity(), cancellationToken);
+        await _eventService.UpdateAsync(id, request.ToCommand(), cancellationToken);
         return NoContent();
     }
 

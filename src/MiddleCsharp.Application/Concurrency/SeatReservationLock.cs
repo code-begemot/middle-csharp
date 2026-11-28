@@ -1,6 +1,11 @@
 namespace MiddleCsharp.Application.Concurrency;
 
-internal static class SeatReservationLock
+internal sealed class SeatReservationLock : ISeatReservationLock
 {
-    public static SemaphoreSlim Instance { get; } = new(1, 1);
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
+    public Task WaitAsync(CancellationToken cancellationToken = default) =>
+        _semaphore.WaitAsync(cancellationToken);
+
+    public void Release() => _semaphore.Release();
 }

@@ -68,7 +68,6 @@ internal sealed class EventRepository : IEventRepository
             TotalCount = totalCount,
             Page = page,
             PageSize = pageSize,
-            TotalPages = (int)Math.Ceiling(totalCount / (double)pageSize),
             Items = items
         };
     }

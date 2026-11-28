@@ -1,21 +1,26 @@
+using MiddleCsharp.Application.Commands;
 using MiddleCsharp.Application.DTOs;
-using MiddleCsharp.Domain.Entities;
 
 namespace MiddleCsharp.Application.Services;
 
 public interface IEventService
 {
-    Task<Event> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<EventResponse> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
-    Task<PaginatedResult<Event>> GetAllAsync(
+    Task<PaginatedResult<EventResponse>> GetAllAsync(
         EventFilter filter,
         int page,
         int pageSize,
         CancellationToken cancellationToken = default);
 
-    Task<Event> CreateAsync(Event newEvent, CancellationToken cancellationToken = default);
+    Task<EventResponse> CreateAsync(
+        CreateEventCommand command,
+        CancellationToken cancellationToken = default);
 
-    Task UpdateAsync(Guid id, Event updatedEvent, CancellationToken cancellationToken = default);
+    Task UpdateAsync(
+        Guid id,
+        UpdateEventCommand command,
+        CancellationToken cancellationToken = default);
 
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }

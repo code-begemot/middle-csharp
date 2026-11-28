@@ -185,7 +185,7 @@ public class BookingProcessingServiceTests
         using var scope = app.CreateScope();
         var eventService = scope.ServiceProvider.GetRequiredService<IEventService>();
 
-        return (await eventService.CreateAsync(TestData.NewEvent(totalSeats: 10))).Id;
+        return (await eventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 10))).Id;
     }
 
     private static async Task<BookingInfo> CreateBookingAsync(TestApplication app, Guid eventId)

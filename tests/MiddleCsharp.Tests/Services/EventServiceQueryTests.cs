@@ -19,9 +19,9 @@ public class EventServiceQueryTests : IDisposable
 
     private async Task SeedSampleEventsAsync()
     {
-        await Service.CreateAsync(TestData.NewEvent("Team Meeting", Jan10, Jan10.AddHours(1)));
-        await Service.CreateAsync(TestData.NewEvent("team retro", Jan12, Jan12.AddHours(2)));
-        await Service.CreateAsync(TestData.NewEvent("Conference", Jan15, Jan15.AddHours(9)));
+        await Service.CreateAsync(TestData.NewCreateCommand("Team Meeting", Jan10, Jan10.AddHours(1)));
+        await Service.CreateAsync(TestData.NewCreateCommand("team retro", Jan12, Jan12.AddHours(2)));
+        await Service.CreateAsync(TestData.NewCreateCommand("Conference", Jan15, Jan15.AddHours(9)));
     }
 
     private async Task SeedFiveEventsAsync()
@@ -29,7 +29,7 @@ public class EventServiceQueryTests : IDisposable
         for (var i = 1; i <= 5; i++)
         {
             var start = new DateTime(2025, 1, i, 10, 0, 0);
-            await Service.CreateAsync(TestData.NewEvent($"Event {i}", start, start.AddHours(1)));
+            await Service.CreateAsync(TestData.NewCreateCommand($"Event {i}", start, start.AddHours(1)));
         }
     }
 
@@ -313,12 +313,12 @@ public class EventServiceQueryTests : IDisposable
     public async Task Pagination_OrdersEventsByStartAt()
     {
         // Arrange
-        await Service.CreateAsync(TestData.NewEvent(
+        await Service.CreateAsync(TestData.NewCreateCommand(
             "Later",
             new DateTime(2025, 3, 1, 10, 0, 0),
             new DateTime(2025, 3, 1, 11, 0, 0)));
 
-        await Service.CreateAsync(TestData.NewEvent(
+        await Service.CreateAsync(TestData.NewCreateCommand(
             "Earlier",
             new DateTime(2025, 2, 1, 10, 0, 0),
             new DateTime(2025, 2, 1, 11, 0, 0)));
