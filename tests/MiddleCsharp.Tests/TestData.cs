@@ -1,4 +1,5 @@
-using MiddleCsharp.Models;
+using MiddleCsharp.Application.Commands;
+using MiddleCsharp.Application.DTOs;
 
 namespace MiddleCsharp.Tests;
 
@@ -9,7 +10,7 @@ internal static class TestData
 
     public static EventFilter NoFilter => new(null, null, null);
 
-    public static Event NewEvent(
+    public static CreateEventCommand NewCreateCommand(
         string title = "Meeting",
         DateTime? startAt = null,
         DateTime? endAt = null,
@@ -19,4 +20,13 @@ internal static class TestData
             startAt ?? DefaultStartAt,
             endAt ?? DefaultEndAt,
             totalSeats);
+
+    public static UpdateEventCommand NewUpdateCommand(
+        string title = "Meeting",
+        DateTime? startAt = null,
+        DateTime? endAt = null) => new(
+            title,
+            "Sprint planning",
+            startAt ?? DefaultStartAt,
+            endAt ?? DefaultEndAt);
 }

@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DTOs;
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.DTOs;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Enums;
+using MiddleCsharp.Domain.Exceptions;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.Services;
 
@@ -27,7 +28,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_ExistingEvent_ReturnsPendingBooking()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
 
         // Act
         var booking = await BookingService.CreateBookingAsync(createdEvent.Id);
@@ -45,7 +46,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_MultipleBookingsForSameEvent_HaveUniqueIds()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
 
         // Act
         var first = await BookingService.CreateBookingAsync(createdEvent.Id);
@@ -74,7 +75,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_DeletedEvent_ThrowsNotFound()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
         await EventService.DeleteAsync(createdEvent.Id);
 
         // Act & Assert
@@ -86,7 +87,7 @@ public class BookingServiceTests : IDisposable
     public async Task GetBookingByIdAsync_ExistingBooking_ReturnsBookingInfo()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
         var created = await BookingService.CreateBookingAsync(createdEvent.Id);
 
         // Act
@@ -103,7 +104,7 @@ public class BookingServiceTests : IDisposable
     public async Task GetBookingByIdAsync_ReflectsConfirmedStatus()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
         var created = await BookingService.CreateBookingAsync(createdEvent.Id);
 
         var context = _app.Get<AppDbContext>();
@@ -123,7 +124,7 @@ public class BookingServiceTests : IDisposable
     public async Task GetBookingByIdAsync_ReflectsRejectedStatus()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent());
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand());
         var created = await BookingService.CreateBookingAsync(createdEvent.Id);
 
         var context = _app.Get<AppDbContext>();
@@ -157,7 +158,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_ExistingEvent_DecrementsAvailableSeats()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 3));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 3));
 
         // Act
         await BookingService.CreateBookingAsync(createdEvent.Id);
@@ -172,7 +173,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_UpToSeatLimit_SucceedsAndThenReturnsConflict()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 3));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 3));
 
         // Act
         var bookings = new List<BookingInfo>();
@@ -199,7 +200,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_NoSeatsLeft_ThrowsNoAvailableSeats()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 1));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 1));
         await BookingService.CreateBookingAsync(createdEvent.Id);
 
         // Act
@@ -215,7 +216,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_ConcurrentRequests_DoesNotOverbook()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 5));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 5));
 
         // Act
         var results = await Task.WhenAll(
@@ -233,7 +234,7 @@ public class BookingServiceTests : IDisposable
     public async Task CreateBookingAsync_ConcurrentRequestsWithEnoughSeats_HaveUniqueIds()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 10));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 10));
 
         // Act
         var bookings = await Task.WhenAll(
@@ -249,7 +250,7 @@ public class BookingServiceTests : IDisposable
     public async Task GetBookingByIdAsync_DoesNotConsumeSeats()
     {
         // Arrange
-        var createdEvent = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 3));
+        var createdEvent = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 3));
         var created = await BookingService.CreateBookingAsync(createdEvent.Id);
 
         // Act

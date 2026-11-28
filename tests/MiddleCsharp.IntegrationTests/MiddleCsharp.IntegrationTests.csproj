@@ -21,7 +21,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MiddleCsharp\middle-csharp.csproj" />
+    <ProjectReference Include="..\..\src\MiddleCsharp.Application\MiddleCsharp.Application.csproj" />
+    <ProjectReference Include="..\..\src\MiddleCsharp.Domain\MiddleCsharp.Domain.csproj" />
+    <ProjectReference Include="..\..\src\MiddleCsharp.Infrastructure\MiddleCsharp.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

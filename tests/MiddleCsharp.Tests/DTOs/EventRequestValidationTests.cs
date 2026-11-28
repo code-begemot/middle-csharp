@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
-using MiddleCsharp.DTOs;
-using MiddleCsharp.Models;
+using MiddleCsharp.Application.DTOs;
+using MiddleCsharp.Domain.Entities;
 
 namespace MiddleCsharp.Tests.DTOs;
 

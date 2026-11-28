@@ -1,5 +1,5 @@
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Exceptions;
 
 namespace MiddleCsharp.Tests.Services;
 
@@ -16,7 +16,7 @@ public class EventServiceSeatTests : IDisposable
     public async Task Create_SetsAvailableSeatsToTotalSeats()
     {
         // Act
-        var created = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 5));
+        var created = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 5));
 
         // Assert
         Assert.Equal(5, created.TotalSeats);
@@ -31,21 +31,21 @@ public class EventServiceSeatTests : IDisposable
     {
         // Act & Assert
         await Assert.ThrowsAsync<EventValidationException>(
-            () => EventService.CreateAsync(TestData.NewEvent(totalSeats: totalSeats)));
+            () => EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: totalSeats)));
     }
 
     [Fact]
     public async Task Update_PreservesSeats()
     {
         // Arrange
-        var created = await EventService.CreateAsync(TestData.NewEvent(totalSeats: 5));
+        var created = await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 5));
         await BookingService.CreateBookingAsync(created.Id);
         await BookingService.CreateBookingAsync(created.Id);
 
         // Act
         await EventService.UpdateAsync(
             created.Id,
-            TestData.NewEvent("Updated", totalSeats: 100));
+            TestData.NewUpdateCommand("Updated"));
 
         // Assert
         var stored = await EventService.GetByIdAsync(created.Id);
@@ -58,7 +58,7 @@ public class EventServiceSeatTests : IDisposable
     public async Task Delete_EventWithBookings_RemovesBookings()
     {
         // Arrange
-        var created = await EventService.CreateAsync(TestData.NewEvent());
+        var created = await EventService.CreateAsync(TestData.NewCreateCommand());
         var booking = await BookingService.CreateBookingAsync(created.Id);
 
         // Act

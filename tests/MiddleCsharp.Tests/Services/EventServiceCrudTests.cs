@@ -1,6 +1,8 @@
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Services;
+using Microsoft.EntityFrameworkCore;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Exceptions;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.Services;
 
@@ -16,7 +18,7 @@ public class EventServiceCrudTests : IDisposable
     public async Task Create_ValidEvent_StoresEventAndAssignsId()
     {
         // Act
-        var created = await Service.CreateAsync(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewCreateCommand());
 
         // Assert
         Assert.NotEqual(Guid.Empty, created.Id);
@@ -30,9 +32,9 @@ public class EventServiceCrudTests : IDisposable
     public async Task GetAll_ReturnsAllStoredEvents()
     {
         // Arrange
-        await Service.CreateAsync(TestData.NewEvent("First"));
-        await Service.CreateAsync(TestData.NewEvent("Second"));
-        await Service.CreateAsync(TestData.NewEvent("Third"));
+        await Service.CreateAsync(TestData.NewCreateCommand("First"));
+        await Service.CreateAsync(TestData.NewCreateCommand("Second"));
+        await Service.CreateAsync(TestData.NewCreateCommand("Third"));
 
         // Act
         var result = await Service.GetAllAsync(TestData.NoFilter, 1, 10);
@@ -46,7 +48,7 @@ public class EventServiceCrudTests : IDisposable
     public async Task GetById_ExistingEvent_ReturnsEvent()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent("Standup"));
+        var created = await Service.CreateAsync(TestData.NewCreateCommand("Standup"));
 
         // Act
         var found = await Service.GetByIdAsync(created.Id);
@@ -56,59 +58,47 @@ public class EventServiceCrudTests : IDisposable
     }
 
     [Fact]
-    public async Task GetById_ReturnedEvent_IsNotTracked()
+    public async Task GetById_DoesNotLeaveEntityInChangeTracker()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent("Original"));
-        var fetched = await Service.GetByIdAsync(created.Id);
+        var created = await Service.CreateAsync(TestData.NewCreateCommand("Original"));
+        var context = _app.Get<AppDbContext>();
+        context.ChangeTracker.Clear();
 
         // Act
-        fetched.UpdateDetails(
-            "Mutated",
-            fetched.Description,
-            fetched.StartAt,
-            fetched.EndAt);
-
-        var context = _app.Get<AppDbContext>();
-        await context.SaveChangesAsync();
+        await Service.GetByIdAsync(created.Id);
 
         // Assert
-        Assert.Equal("Original", (await Service.GetByIdAsync(created.Id)).Title);
+        Assert.Empty(context.ChangeTracker.Entries<Event>());
     }
 
     [Fact]
-    public async Task GetAll_ReturnedItems_AreNotTracked()
+    public async Task GetAll_DoesNotLeaveEntitiesInChangeTracker()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent("Original"));
-        var item = Assert.Single((await Service.GetAllAsync(TestData.NoFilter, 1, 10)).Items);
+        await Service.CreateAsync(TestData.NewCreateCommand("Original"));
+        var context = _app.Get<AppDbContext>();
+        context.ChangeTracker.Clear();
 
         // Act
-        item.UpdateDetails(
-            "Mutated",
-            item.Description,
-            item.StartAt,
-            item.EndAt);
-
-        var context = _app.Get<AppDbContext>();
-        await context.SaveChangesAsync();
+        await Service.GetAllAsync(TestData.NoFilter, 1, 10);
 
         // Assert
-        Assert.Equal("Original", (await Service.GetByIdAsync(created.Id)).Title);
+        Assert.Empty(context.ChangeTracker.Entries<Event>());
     }
 
     [Fact]
     public async Task Update_ExistingEvent_ReplacesAllFields()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewCreateCommand());
         var updatedStart = new DateTime(2025, 2, 1, 9, 0, 0);
         var updatedEnd = new DateTime(2025, 2, 1, 10, 0, 0);
 
         // Act
         await Service.UpdateAsync(
             created.Id,
-            TestData.NewEvent("Updated", updatedStart, updatedEnd));
+            TestData.NewUpdateCommand("Updated", updatedStart, updatedEnd));
 
         // Assert
         var stored = await Service.GetByIdAsync(created.Id);
@@ -123,7 +113,7 @@ public class EventServiceCrudTests : IDisposable
     public async Task Delete_ExistingEvent_RemovesEvent()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent());
+        var created = await Service.CreateAsync(TestData.NewCreateCommand());
 
         // Act
         await Service.DeleteAsync(created.Id);

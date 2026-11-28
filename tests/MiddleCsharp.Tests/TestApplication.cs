@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using MiddleCsharp.BackgroundServices;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DataAccess.Repositories;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Abstractions.Persistence;
+using MiddleCsharp.Application.Concurrency;
+using MiddleCsharp.Application.Processing;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Infrastructure.Persistence;
+using MiddleCsharp.Infrastructure.Persistence.Repositories;
 
 namespace MiddleCsharp.Tests;
 
@@ -31,6 +33,7 @@ internal sealed class TestApplication : IDisposable
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<BookingProcessor>();
+        services.AddSingleton<ISeatReservationLock, SeatReservationLock>();
         services.AddSingleton(timeProvider ?? TimeProvider.System);
 
         _serviceProvider = services.BuildServiceProvider(

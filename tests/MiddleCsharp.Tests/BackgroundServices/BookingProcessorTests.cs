@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using MiddleCsharp.BackgroundServices;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Processing;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Enums;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.BackgroundServices;
 
@@ -108,7 +109,7 @@ public class BookingProcessorTests : IDisposable
         {
             var eventService = scope.ServiceProvider.GetRequiredService<IEventService>();
             var bookingService = scope.ServiceProvider.GetRequiredService<IBookingService>();
-            eventId = (await eventService.CreateAsync(TestData.NewEvent(totalSeats: 2))).Id;
+            eventId = (await eventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 2))).Id;
             bookingId = (await bookingService.CreateBookingAsync(eventId)).Id;
         }
 
@@ -145,7 +146,7 @@ public class BookingProcessorTests : IDisposable
     }
 
     private async Task<Guid> CreateEventAsync(int totalSeats = 10) =>
-        (await EventService.CreateAsync(TestData.NewEvent(totalSeats: totalSeats))).Id;
+        (await EventService.CreateAsync(TestData.NewCreateCommand(totalSeats: totalSeats))).Id;
 
     private async Task<Guid> CreateBookingDirectlyAsync(Guid eventId)
     {

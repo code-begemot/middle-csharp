@@ -1,7 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DataAccess.Repositories;
-using MiddleCsharp.Models;
+using MiddleCsharp.Application.Abstractions.Persistence;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Infrastructure.Persistence;
+using MiddleCsharp.Infrastructure.Persistence.Repositories;
 using Npgsql;
 
 namespace MiddleCsharp.IntegrationTests;

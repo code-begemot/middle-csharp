@@ -2,11 +2,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using MiddleCsharp.BackgroundServices;
-using MiddleCsharp.DataAccess;
-using MiddleCsharp.DTOs;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.DTOs;
+using MiddleCsharp.Application.Processing;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Enums;
+using MiddleCsharp.Infrastructure.Persistence;
 
 namespace MiddleCsharp.Tests.BackgroundServices;
 
@@ -184,7 +185,7 @@ public class BookingProcessingServiceTests
         using var scope = app.CreateScope();
         var eventService = scope.ServiceProvider.GetRequiredService<IEventService>();
 
-        return (await eventService.CreateAsync(TestData.NewEvent(totalSeats: 10))).Id;
+        return (await eventService.CreateAsync(TestData.NewCreateCommand(totalSeats: 10))).Id;
     }
 
     private static async Task<BookingInfo> CreateBookingAsync(TestApplication app, Guid eventId)

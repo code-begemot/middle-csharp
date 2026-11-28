@@ -1,6 +1,7 @@
-using MiddleCsharp.Exceptions;
-using MiddleCsharp.Models;
-using MiddleCsharp.Services;
+using MiddleCsharp.Application.Commands;
+using MiddleCsharp.Application.Services;
+using MiddleCsharp.Domain.Entities;
+using MiddleCsharp.Domain.Exceptions;
 
 namespace MiddleCsharp.Tests.Services;
 
@@ -34,7 +35,7 @@ public class EventServiceFailureTests : IDisposable
 
         // Act & Assert
         await Assert.ThrowsAsync<EventNotFoundException>(
-            () => Service.UpdateAsync(unknownId, TestData.NewEvent()));
+            () => Service.UpdateAsync(unknownId, TestData.NewUpdateCommand()));
     }
 
     [Fact]
@@ -51,7 +52,7 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_EmptyTitle_ThrowsValidation(string title)
     {
         // Arrange
-        var invalid = TestData.NewEvent(title);
+        var invalid = TestData.NewCreateCommand(title);
 
         // Act
         var exception = await Assert.ThrowsAsync<EventValidationException>(
@@ -65,7 +66,7 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_TitleTooLong_ThrowsValidation()
     {
         // Arrange
-        var invalid = TestData.NewEvent(new string('t', EventConstraints.TitleMaxLength + 1));
+        var invalid = TestData.NewCreateCommand(new string('t', EventConstraints.TitleMaxLength + 1));
 
         // Act
         var exception = await Assert.ThrowsAsync<EventValidationException>(
@@ -81,12 +82,12 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_DescriptionTooLong_ThrowsValidation()
     {
         // Arrange
-        var invalid = new Event(
+        var invalid = new CreateEventCommand(
             "Meeting",
             new string('d', EventConstraints.DescriptionMaxLength + 1),
             TestData.DefaultStartAt,
             TestData.DefaultEndAt,
-            totalSeats: 10);
+            TotalSeats: 10);
 
         // Act
         var exception = await Assert.ThrowsAsync<EventValidationException>(
@@ -102,12 +103,12 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_DefaultStartAt_ThrowsValidation()
     {
         // Arrange
-        var invalid = new Event(
+        var invalid = new CreateEventCommand(
             "Meeting",
             null,
             default,
             TestData.DefaultEndAt,
-            totalSeats: 10);
+            TotalSeats: 10);
 
         // Act
         var exception = await Assert.ThrowsAsync<EventValidationException>(
@@ -121,12 +122,12 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_DefaultEndAt_ThrowsValidation()
     {
         // Arrange
-        var invalid = new Event(
+        var invalid = new CreateEventCommand(
             "Meeting",
             null,
             TestData.DefaultStartAt,
             default,
-            totalSeats: 10);
+            TotalSeats: 10);
 
         // Act
         var exception = await Assert.ThrowsAsync<EventValidationException>(
@@ -140,7 +141,7 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_EndBeforeStart_ThrowsValidation()
     {
         // Arrange
-        var invalid = TestData.NewEvent(
+        var invalid = TestData.NewCreateCommand(
             startAt: new DateTime(2025, 1, 10, 11, 0, 0),
             endAt: new DateTime(2025, 1, 10, 10, 0, 0));
 
@@ -157,7 +158,7 @@ public class EventServiceFailureTests : IDisposable
     {
         // Arrange
         var moment = new DateTime(2025, 1, 10, 10, 0, 0);
-        var invalid = TestData.NewEvent(startAt: moment, endAt: moment);
+        var invalid = TestData.NewCreateCommand(startAt: moment, endAt: moment);
 
         // Act & Assert
         await Assert.ThrowsAsync<EventValidationException>(
@@ -168,8 +169,8 @@ public class EventServiceFailureTests : IDisposable
     public async Task Update_EndBeforeStart_ThrowsValidation()
     {
         // Arrange
-        var created = await Service.CreateAsync(TestData.NewEvent());
-        var invalid = TestData.NewEvent(
+        var created = await Service.CreateAsync(TestData.NewCreateCommand());
+        var invalid = TestData.NewUpdateCommand(
             startAt: new DateTime(2025, 1, 10, 11, 0, 0),
             endAt: new DateTime(2025, 1, 10, 10, 0, 0));
 
@@ -182,7 +183,7 @@ public class EventServiceFailureTests : IDisposable
     public async Task Create_InvalidEvent_DoesNotStoreIt()
     {
         // Arrange
-        var invalid = TestData.NewEvent("");
+        var invalid = TestData.NewCreateCommand("");
 
         // Act
         var create = () => Service.CreateAsync(invalid);
